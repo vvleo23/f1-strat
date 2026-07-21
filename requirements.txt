@@ -1,0 +1,10 @@
+fastf1
+pandas
+requests
+matplotlib
+seaborn
+plotly
+pyarrow
+python-dotenv
+truststore
+
