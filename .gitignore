@@ -3,8 +3,15 @@ __pycache__/
 *.pyc
 cache/
 data/raw/
-data/processed/
+data/curated/
+data/artifacts/
 .env
 .idea/
+.playwright-mcp/
 .ipynb_checkpoints/
-
+.pytest_cache/
+.DS_Store
+._*
+__MACOSX/
+Thumbs.db
+Desktop.ini

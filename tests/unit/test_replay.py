@@ -1,4 +1,4 @@
-"""Tests für Rekonstruktion und Darstellung des Circle of Doom."""
+"""Tests for temporal replay reconstruction and rendering."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pandas as pd
 
-from src.circle_of_doom import (
+from f1_pipeline.replay.circle_of_doom import (
     DEFAULT_FRAME_SECONDS,
     DEFAULT_MAX_STALENESS_SECONDS,
     PLAYBACK_SPEEDS,
@@ -257,7 +257,7 @@ class CircleOfDoomTest(unittest.TestCase):
 
         self.assertEqual(len(figure.frames), len(replay.frames))
         self.assertEqual(len(figure.data), 6)
-        self.assertIn("Circle of Doom", figure.layout.title.text)
+        self.assertIn("Race replay", figure.layout.title.text)
 
         driver_order = list(cast(Any, figure.data[3]).customdata)
         self.assertEqual(driver_order, sorted(driver_order))
