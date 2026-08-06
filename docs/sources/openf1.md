@@ -1,6 +1,6 @@
 # OpenF1
 
-**Status:** Implemented for the Hungary 2026 race; complete weekend ingestion is planned.
+**Status:** Implemented for all five Hungary 2026 weekend sessions; persisted scheduling and finalization remain planned.
 
 [OpenF1](https://openf1.org/) is the primary event-oriented source. Its HTTP API provides structured historical Formula 1 data with absolute timestamps and stable session keys.
 
@@ -19,18 +19,22 @@
 
 OpenF1 is the primary source for meeting/session discovery and the replay timeline. The target weekend pipeline discovers every advertised session, including sprint formats, before selecting endpoints for a job profile. FastF1 overlap is retained only as a separate cross-check.
 
+The `weekend_facts` profile loads drivers, laps, stints, weather, and the applicable position, pit, interval, and Race Control data. The OpenF1 `intervals` endpoint is not available for the verified Hungary practice and qualifying sessions and is therefore not requested for those session types. High-volume `location` remains an explicit replay or geometry input.
+
+For the Hungary weekend weather pipeline, OpenF1 `circuit_key=4` is the stable join to the reviewed Wikidata entity `Q171356`. OpenF1 provides the identity but not the WGS84 weather-reference coordinate.
+
 ## Access
 
 - Base URL: `https://api.openf1.org/v1`
 - Historical HTTP GET requests without authentication for the current use case
 - Bounded timeouts, retries with backoff, and at most 30 community requests per minute
-- Raw Parquet snapshots under `data/raw/`
+- Immutable content-addressed Raw Parquet snapshots plus compatible latest paths under `data/raw/`
 
 ## Verification
 
-`f1_pipeline.sources.session_verification` currently discovers the Hungary meeting and race instead of guessing the session key. It does not yet ingest all weekend sessions. Each implemented endpoint is checked independently for response shape, required fields, session identity, UTC timestamps, duplicate business keys, non-empty minimum data, and Parquet read-after-write integrity.
+`f1_pipeline.sources.weekend_weather_pipeline` discovers and ingests Practice 1 (`11335`), Practice 2 (`11336`), Practice 3 (`11337`), Qualifying (`11338`), and Race (`11342`) instead of deriving sequential keys. Each applicable endpoint is checked independently for response shape, required fields, session identity, UTC timestamps, duplicate business keys, and Parquet read-after-write integrity.
 
-The result records endpoint status, row count, path, retrieval time, and error details. A failed endpoint does not remove successful snapshots or stop the FastF1 check. Existing valid snapshots may be reported as `stale` when the API is unavailable.
+The result records endpoint status, row count, raw and Silver paths, hashes, retrieval time, and error details in immutable session and weekend manifests. A failed endpoint does not remove successful snapshots or stop independent sessions and weather jobs. Existing valid snapshots are reported as `stale` when reused. Silver outputs cover session entries, laps, intervals, positions, pit stops, stints, Race Control events, and weather observations.
 
 ## Limits
 

@@ -2,7 +2,9 @@
 
 - The main product is an automated Python data pipeline for a selected Formula 1 race weekend using sources such as OpenF1, FastF1, and Open-Meteo.
 - Meeting selection, session discovery, ingestion jobs, validation, immutable snapshots, manifests, and scheduling take priority over models and UI.
+- The binding implementation order is F1/Wikidata/Open-Meteo weekend weather pipeline, complete weekend ingestion and Silver facts, replay leakage removal, Calculation Snapshots, online strategy and pit-window recommendations, then the read-only UI.
 - Historical replay is a pipeline consumer that releases data only up to `decision_time`; calculations, predictions, and dashboards must use the same temporal boundary.
+- Online strategy and pit-window recommendations are MVP outputs. Rain radar is discarded and must not be added as a source, adapter, or UI feature.
 - `README.md` is the Single Source of Truth for the project goal, structure, pipeline, data model, MVP, status, roadmap, setup, and usage.
 - `docs/projektdokumentation.md` is the German project report for process, verification evidence, problems, decisions, research, and figures.
 - `docs/sources/` contains one concise English source card per external source.

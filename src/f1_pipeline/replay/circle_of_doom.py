@@ -56,15 +56,14 @@ LAPPED_GAP_PATTERN = re.compile(r"^\+(\d+)\s+LAPS?$", re.IGNORECASE)
 FALLBACK_TEAM_COLOUR = "#808080"
 SOURCE_TITLE = (
     "OpenF1: primary replay timeline · FastF1: laps/tyres/weather cross-check · "
-    "Open-Meteo/Wikidata: planned · RainViewer: deferred"
+    "Open-Meteo: forecast snapshots · Wikidata: circuit reference point"
 )
 SOURCE_ANNOTATION = (
     "<b>Why these sources?</b><br>"
     "<b>OpenF1</b> — primary timeline: session, gaps, positions, race control<br>"
     "<b>FastF1</b> — historical cross-check: laps, tyres, weather, telemetry<br>"
-    "<b>Open-Meteo</b> — forecasts; planned, not used in this replay<br>"
-    "<b>RainViewer</b> — radar and nowcast; deferred, not used<br>"
-    "<b>Wikidata</b> — circuit reference coordinates; planned, not used in this replay"
+    "<b>Open-Meteo</b> — immutable forecasts; not used in this replay yet<br>"
+    "<b>Wikidata</b> — validated circuit reference coordinates"
 )
 
 

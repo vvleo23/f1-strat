@@ -18,6 +18,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from f1_pipeline.data_validation import DataValidationError, validate_frame
+from f1_pipeline.persistence import atomic_parquet
 from f1_pipeline.settings import CURATED_DATA_DIR, RAW_DATA_DIR
 
 BASE_URL = "https://api.openf1.org/v1"
@@ -45,6 +46,15 @@ TABLE_COLUMNS: dict[str, list[str]] = {
         "country_id",
         "circuit_info_url",
         "circuit_image_url",
+        "wikidata_entity_id",
+        "reference_latitude",
+        "reference_longitude",
+        "reference_crs",
+        "coordinate_revision",
+        "coordinate_retrieved_at",
+        "coordinate_verification_status",
+        "coordinate_raw_path",
+        "coordinate_sha256",
         "source_system",
         "source_record_key",
         "ingested_at",
@@ -146,6 +156,7 @@ DATETIME_COLUMNS = {
     "scheduled_end_utc",
     "valid_from_utc",
     "valid_to_utc",
+    "coordinate_retrieved_at",
 }
 
 MASTER_KEY_COLUMNS = {
@@ -358,15 +369,26 @@ def _load_or_fetch(
     path: Path,
     refresh: bool,
     ingested_at: pd.Timestamp,
-) -> tuple[list[dict[str, Any]], bool]:
+) -> tuple[list[dict[str, Any]], bool, Path]:
     if path.exists() and not refresh:
         records = pd.read_parquet(path).to_dict(orient="records")
-        return cast(list[dict[str, Any]], records), False
+        return cast(list[dict[str, Any]], records), False, path
     payload = client.get_json(endpoint, params)
-    if path.exists():
-        shutil.copy2(path, _raw_snapshot_path(path, ingested_at))
-    pd.DataFrame(payload).to_parquet(path, index=False)
-    return payload, True
+    snapshot_path = _raw_snapshot_path(path, ingested_at)
+    atomic_parquet(pd.DataFrame(payload), snapshot_path)
+    return payload, True, snapshot_path
+
+
+def _commit_raw_snapshot(snapshot_path: Path, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=path.suffix, delete=False) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        shutil.copy2(snapshot_path, temporary_path)
+        pd.read_parquet(temporary_path)
+        temporary_path.replace(path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _table_frame(name: str, records: list[dict[str, Any]]) -> pd.DataFrame:
@@ -686,10 +708,10 @@ def load_master_data(season: int = 2026, refresh: bool = False) -> dict[str, Pat
     client = OpenF1Client()
     meeting_path = _raw_path(season, "meetings")
     session_path = _raw_path(season, "sessions")
-    meetings, meeting_fetched = _load_or_fetch(
+    meetings, meeting_fetched, meeting_input_path = _load_or_fetch(
         client, "meetings", {"year": season}, meeting_path, refresh, ingested_at
     )
-    sessions, session_fetched = _load_or_fetch(
+    sessions, session_fetched, session_input_path = _load_or_fetch(
         client, "sessions", {"year": season}, session_path, refresh, ingested_at
     )
     if not meetings or not sessions:
@@ -697,7 +719,7 @@ def load_master_data(season: int = 2026, refresh: bool = False) -> dict[str, Pat
     roster_session = choose_roster_session(sessions, ingested_at)
     roster_key = int(roster_session["session_key"])
     driver_path = _raw_path(season, "drivers", str(roster_key))
-    drivers, drivers_fetched = _load_or_fetch(
+    drivers, drivers_fetched, driver_input_path = _load_or_fetch(
         client,
         "drivers",
         {"session_key": roster_key},
@@ -714,13 +736,20 @@ def load_master_data(season: int = 2026, refresh: bool = False) -> dict[str, Pat
         roster_key,
         circuit_geometry=_load_existing_geometry(),
     )
+    for fetched, snapshot_path, latest_path in (
+        (meeting_fetched, meeting_input_path, meeting_path),
+        (session_fetched, session_input_path, session_path),
+        (drivers_fetched, driver_input_path, driver_path),
+    ):
+        if fetched:
+            _commit_raw_snapshot(snapshot_path, latest_path)
     output_paths = {name: _write_table(name, records) for name, records in tables.items()}
     verified_row_counts = validate_persisted_tables(output_paths)
 
     raw_inputs = [
-        ("meetings", {"year": season}, meeting_path, meeting_fetched),
-        ("sessions", {"year": season}, session_path, session_fetched),
-        ("drivers", {"session_key": roster_key}, driver_path, drivers_fetched),
+        ("meetings", {"year": season}, meeting_input_path, meeting_fetched),
+        ("sessions", {"year": season}, session_input_path, session_fetched),
+        ("drivers", {"session_key": roster_key}, driver_input_path, drivers_fetched),
     ]
     manifest = {
         "schema_version": SCHEMA_VERSION,

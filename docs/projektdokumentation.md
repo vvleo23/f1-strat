@@ -6,7 +6,7 @@ Diese Datei ist die Grundlage für die spätere schriftliche Abgabe. Der verbind
 
 Öffentliche Formel-1-Daten sind über mehrere inoffizielle Quellen verteilt und unterscheiden sich in Struktur, Aktualität und Bedeutung. Das Hauptprodukt ist deshalb eine automatisierte Datenpipeline für ein ausgewähltes Rennwochenende. Sie entdeckt die vorhandenen Sessions, führt begrenzte Lade- und Wiederholungsjobs aus, validiert die Antworten und hält Herkunft sowie Qualität jedes Snapshots fest.
 
-Ein historischer Replay ist ein nachgelagerter Ausführungsmodus dieser Pipeline. Obwohl alle Renndaten bereits lokal vorliegen können, gibt er sie nur bis zu einem simulierten Zeitpunkt frei. Spätere Qualifying-, Renn- und Strategieberechnungen müssen dadurch so arbeiten, als würden die Daten gerade eintreffen. Eine Strategieoptimierung, Live-Anwendung oder Benutzeroberfläche ist noch nicht Teil des Pipeline-MVP.
+Ein historischer Replay ist ein nachgelagerter Ausführungsmodus dieser Pipeline. Obwohl alle Renndaten bereits lokal vorliegen können, gibt er sie nur bis zu einem simulierten Zeitpunkt frei. Spätere Qualifying-, Renn- und Strategieberechnungen müssen dadurch so arbeiten, als würden die Daten gerade eintreffen. Eine transparente Online-Strategie- und Boxenstoppfenster-Empfehlung gehört zum MVP; komplexe Optimierung und bezahlte Live-Ingestion bleiben ausgeschlossen.
 
 ## 2. Vorgehen
 
@@ -16,22 +16,24 @@ Zu Beginn wurden FastF1 und OpenF1 anhand historischer Sessions praktisch geprü
 
 ### 2.2 Referenzfall festlegen
 
-Als reproduzierbarer Akzeptanzfall wurde zunächst das Rennen des Hungarian Grand Prix 2026 gewählt:
+Als reproduzierbarer Akzeptanzfall wurde das vollständige Wochenende des Hungarian Grand Prix 2026 gewählt:
 
 - OpenF1 `session_key=11342`
+- OpenF1 Practice `11335`, `11336`, `11337` und Qualifying `11338`
+- OpenF1 `meeting_key=1291` und `circuit_key=4`
 - Hungaroring, 26. Juli 2026
 - OpenF1 als primäre Replay- und Race-Control-Quelle
 - FastF1 als unabhängiger Abgleich für Runden und beobachtetes Wetter
 
 Belgien 2026 (`session_key=11334`) bleibt ein Regressionstest für den Circle-of-Doom-Replay. Zandvoort 2025 (`session_key=9920`) dient als zweiter Geometriefall.
 
-Das Ziel ist nicht auf ein festes Rennformat beschränkt. Nach Auswahl eines Meetings werden alle gemeldeten Sessions entdeckt. Ein Replay lädt nur das Rennen. Eine spätere Qualifying-Berechnung lädt die davor abgeschlossenen Trainingssessions; eine Rennberechnung kann zusätzlich Qualifying und Sprint verwenden. Trainingsdaten werden daher zweckgebunden automatisch geladen, aber nicht für jede einfache Kalenderabfrage.
+Das Ziel ist nicht auf ein festes Rennformat beschränkt. Nach Auswahl eines Meetings werden alle gemeldeten Sessions entdeckt. Die Pipeline kann anschließend alle Sessions oder eine geprüfte Teilmenge nach OpenF1-Key, kanonischem Sessiontyp oder der Schnittmenge beider Filter laden. Ein Replay lädt nur das Rennen. Eine spätere Qualifying-Berechnung lädt die davor abgeschlossenen Trainingssessions; eine Rennberechnung kann zusätzlich Qualifying und Sprint verwenden. Trainingsdaten werden daher zweckgebunden automatisch geladen, aber nicht für jede einfache Kalenderabfrage.
 
 ### 2.3 Daten absichern
 
 Die Pipeline speichert quellnahe Daten als Parquet, validiert Pflichtfelder, Schlüssel und UTC-Zeitstempel und liest geschriebene Dateien zur Kontrolle erneut ein. Erfolgreiche Snapshots bleiben erhalten, wenn ein späterer Abruf fehlschlägt. Fehler werden je Quelle und Endpoint isoliert dokumentiert.
 
-Die aktuelle Implementierung besitzt einzelne manuelle Einstiegspunkte. Geplant ist ein idempotenter Orchestrator mit Jobs für Eventauswahl, Session-Discovery, Session-Ingestion, Wetter-Snapshots, zeitversetzte Wiederholungen und Finalisierung. Automatisiert bedeutet dabei nicht live: OpenF1 wird nach Ende einer Session historisch abgefragt, solange kein kostenpflichtiger Live-Zugang verwendet wird.
+Die aktuelle Implementierung besitzt einen manuellen idempotenten Weekend-Orchestrator für Eventauswahl, Session-Discovery, Session-Ingestion, Silver-Transformation, Wikidata und Open-Meteo. Persistierte zeitversetzte Wiederholungen und automatische Finalisierung bleiben geplant. Automatisiert bedeutet dabei nicht live: OpenF1 wird nach Ende einer Session historisch abgefragt, solange kein kostenpflichtiger Live-Zugang verwendet wird.
 
 ### 2.4 Zeitlich begrenzten Replay aufbauen
 
@@ -63,23 +65,25 @@ Die vollständigen technischen Kurzbeschreibungen stehen in den englischen Quell
 
 OpenF1 liefert die Sessionidentität und die zeitaufgelöste Ereignisfolge. Die Verifikation prüft Erreichbarkeit, Antwortform, Pflichtfelder, Session-Schlüssel, Zeitstempel, Duplikate sowie das Schreiben und erneute Lesen der Parquet-Dateien.
 
-Für den Referenzfall wurden unter anderem 22 Fahrer, 1.423 Runden, 29.593 Intervallbeobachtungen, 44 Boxenstopps, 67 Stints, 80 Race-Control-Meldungen, 156 Wetterzeilen und 783.772 Positionskoordinaten erfolgreich erfasst. Diese Zahlen sind ein datierter Nachweis des geprüften Snapshots und keine Garantie für andere Sessions.
+Für alle fünf Hungary-Sessions wurden 110 Session-Einträge, 3.232 Runden, 3.407 Positionsbeobachtungen, 429 Pit-Einträge, 453 Stints, 324 Race-Control-Meldungen und 473 Wetterzeilen als Silver-Facts persistiert. Die 29.593 Intervallbeobachtungen gehören zum Rennen; OpenF1 stellt diesen Endpoint für die geprüften Practice- und Qualifying-Sessions nicht bereit. Die bestehenden 783.772 Race-Positionskoordinaten bleiben ein zweckgebundener Replay-/Geometrie-Input und werden nicht in allgemeine Silver-Facts dupliziert. Diese Zahlen sind ein datierter Nachweis und keine Garantie für andere Meetings.
 
 ### FastF1
 
 FastF1 wird sessionzentriert geladen und lokal gecacht. Geprüft werden mindestens Fahrer, Rundennummer und Rundenzeit sowie – sofern vorhanden – Wetter und Telemetrie. Für Hungary 2026 wurden 1.431 Runden und 157 Wetterzeilen gespeichert.
 
-### Geplante Quellen
+### Weekend-Weather-Pipeline
 
-Open-Meteo ist für unveränderliche, zeitpunktgerechte Wetterprognosen vorgesehen. Für zukünftige ausgewählte Rennwochenenden speichert die Pipeline Forecast-API-Snapshots ungefähr 24, 6 und 1 Stunde vor einer Session. Für historische Replays wird bevorzugt ein konkreter Single Run geladen. Dessen Modellinitialisierung ist nicht mit der öffentlichen Verfügbarkeit gleichzusetzen; globale Modelle benötigen typischerweise weitere vier bis sechs Stunden. Ein Lauf darf erst verwendet werden, wenn seine nachgewiesene `available_at` nicht nach der simulierten `decision_time` liegt.
+Der erste durchgängige Lauf verbindet OpenF1 `circuit_key=4` über ein geprüftes Mapping mit Wikidata `Q171356`. Das Mapping liegt als versionierter Pipeline-Input in `config/reviewed_circuit_mappings.json`; Schema und Inhalts-Hash werden im Gesamtmanifest festgehalten. Verifiziert wurden Revision `2519292350`, Breite `47.582222222222` und Länge `19.251111111111` in WGS84. Die Wikidata-Rohantwort, ihr Hash und die Prüfmetadaten bleiben erhalten; die Circuit-Dimension enthält den normalisierten Referenzpunkt.
+
+Open-Meteo liefert für den Akzeptanzfall den ECMWF-IFS-Lauf mit Initialisierung `2026-07-26T00:00:00Z`. Die ausgeführte Weekend-Weather-Pipeline speichert 168 stündliche Forecast-Zeilen, die vollständige Rohantwort, Requestparameter, Einheiten, Grid-Koordinaten, Zeitgrenzen und Hashes. Das konfigurierte `available_at=2026-07-26T06:00:00Z` ist eine konservative dokumentierte Latenzregel und kein Nachweis eines damaligen Abrufs. Für zukünftige ausgewählte Rennwochenenden bleiben geplante Forecast-API-Snapshots ungefähr 24, 6 und 1 Stunde vor einer Session vorgesehen.
 
 Die Historical Forecast API bildet eine fortlaufende Reihe aus den ersten Stunden aufeinanderfolgender Modellläufe und eignet sich für Training und Vergleiche. Previous Runs dienen optional dem Vergleich fester Vorlaufzeiten. Historical Weather sowie Wetterdaten aus OpenF1 und FastF1 sind Beobachtungs- beziehungsweise Referenzdaten. Sie bewerten einen Forecast, ersetzen oder verändern ihn aber nicht rückwirkend.
 
-Open-Meteo bietet weltweite Modellabdeckung; stündliche Daten sind der gemeinsame Standard. Native 15-Minuten-Daten sind hauptsächlich in Zentraleuropa und Nordamerika verfügbar und werden andernorts aus Stundenwerten interpoliert. Wikidata ist als Quelle für einen geprüften WGS84-Referenzpunkt je Strecke vorgesehen. RainViewer bleibt eine spätere optionale Radarquelle.
+Open-Meteo bietet weltweite Modellabdeckung; stündliche Daten sind der gemeinsame Standard. Native 15-Minuten-Daten sind hauptsächlich in Zentraleuropa und Nordamerika verfügbar und werden andernorts aus Stundenwerten interpoliert. Für eine unbekannte Strecke führt die Pipeline eine begrenzte Wikidata-Suche nach dem OpenF1-Streckennamen aus, hält den OpenF1-Ort separat als Prüfkontext fest und persistiert die Kandidaten als Rohbeleg. Diese bleiben `partial` und dürfen erst nach Prüfung sowie Aufnahme in die Registry Wetterkoordinaten liefern. Wetterradar ist verworfen und nicht Teil der Pipeline.
 
 ### Verifikationsnachweis
 
-Der ausführbare Verifikationslauf schreibt seinen Ergebnisbericht nach `data/artifacts/source_verification/hungary_2026.json`. Der Bericht enthält Abrufzeitpunkt, Quellstatus, Endpoint-Status, Zeilenzahlen, Pfade und Fehlerkontext. Die Zustände `available`, `partial`, `stale` und `unavailable` verhindern, dass fehlende Daten als gültige Nullwerte erscheinen.
+Der ausführbare Verifikationslauf schreibt seinen Ergebnisbericht nach `data/artifacts/source_verification/hungary_2026.json`. Die Weekend-Weather-Pipeline schreibt zusätzlich inhaltsidentifizierte Endpoint-, Session-, Weekend- und Gesamtmanifeste nach `data/curated/manifests/`. Der geprüfte Lauf entdeckte und verarbeitete fünf Sessions, verwendete Wikidata `Q171356`, persistierte acht Silver-Fact-Typen und speicherte 168 Forecast-Zeilen. Eine identische Wiederholung verwendete dieselbe Run-ID. Ein separater realer Kandidatenlauf für „Silverstone Circuit“ lieferte `Q171402` mit Status `partial`; der Treffer wurde nicht als Mapping oder Wetterkoordinate freigegeben. Die Zustände `available`, `partial`, `stale` und `unavailable` verhindern, dass fehlende Daten als gültige Nullwerte erscheinen.
 
 ## 4. Aufgetretene Probleme und Hindernisse
 
@@ -105,11 +109,15 @@ Der bestehende Replay ist nur teilweise point-in-time-konform. Seine As-of-Zuord
 
 ### Streckenkoordinaten ohne Weltbezug
 
-OpenF1 `location.x/y/z` besitzt kein dokumentiertes geografisches Koordinatensystem. Die Werte dürfen nicht als Längen- und Breitengrade interpretiert werden. Die aktuelle Centerline bleibt deshalb eine lokale Anzeigegeometrie. Für Open-Meteo wird unabhängig davon ein manuell zugeordneter und geprüfter Wikidata-`P625`-Referenzpunkt verwendet. Wikidata liefert keine Streckenlinie oder grafische Karte.
+OpenF1 `location.x/y/z` besitzt kein dokumentiertes geografisches Koordinatensystem. Die Werte dürfen nicht als Längen- und Breitengrade interpretiert werden. Die aktuelle Centerline bleibt deshalb eine lokale Anzeigegeometrie. Für Open-Meteo wird unabhängig davon ein über die versionierte Registry zugeordneter und geprüfter Wikidata-`P625`-Referenzpunkt verwendet. Wikidata liefert keine Streckenlinie oder grafische Karte.
 
 ### Datenmenge und Rate Limits
 
 Positionsdaten werden fahrerweise geladen und erzeugen deutlich mehr Zeilen als andere Endpoints. Die Pipeline begrenzt Requests, verwendet Timeouts und Retries mit Backoff und nutzt vorhandene Snapshots, statt Daten unnötig neu abzurufen.
+
+### Unterschiedliche Endpoint-Anwendbarkeit
+
+Der OpenF1-Endpoint `intervals` antwortete für die geprüften Practice- und Qualifying-Sessions mit HTTP 404, während Race-Intervalle verfügbar waren. Endpoint-Profile unterscheiden deshalb zwischen erforderlich, optional und nicht anwendbar. Einzelne Practice- und Qualifying-Runden besitzen außerdem keinen `date_start`. Diese Zeilen bleiben erhalten, erhalten aber weder erfundene Ereigniszeiten noch eine simulierte Verfügbarkeit.
 
 ## 5. Entscheidungen
 
@@ -122,7 +130,7 @@ Positionsdaten werden fahrerweise geladen und erzeugen deutlich mehr Zeilen als 
 | August 2026 | Bronze-, Silver- und Gold-Trennung | Rohbelege, normalisierte Daten und abgeleitete Ergebnisse bleiben unterscheidbar |
 | August 2026 | Session-lokale Geometrie kennzeichnen | OpenF1-Koordinaten sind nicht geografisch referenziert |
 | August 2026 | Circle of Doom standardmäßig synthetisch lassen | Bestehender Regressionstest bleibt stabil; gespeicherte Geometrie wird bewusst aktiviert |
-| August 2026 | Pit-Window-Forecast zurückstellen | Der aktuelle Datenstand reicht nur für eine hypothetische Boxenausgangsprojektion |
+| August 2026 | Hypothetische Boxenausgangsprojektion nicht als Empfehlung ausgeben | Erst der spätere versionierte Online-Algorithmus darf eine Strategie- und Boxenstoppfenster-Empfehlung erzeugen |
 | August 2026 | README als Single Source of Truth | Status, Architektur und MVP-Grenzen sollen nicht zwischen Dokumenten auseinanderlaufen |
 | August 2026 | Automatisierte Weekend-Pipeline als Hauptprodukt | Verlässliche Daten und Jobs sind Voraussetzung für jede spätere Analyse oder Anzeige |
 | August 2026 | Historische Daten über `decision_time` freigeben | Replay und Berechnungen dürfen keine zukünftigen Rennereignisse sehen |
@@ -132,7 +140,15 @@ Positionsdaten werden fahrerweise geladen und erzeugen deutlich mehr Zeilen als 
 | August 2026 | Dashboard als read-only Consumer zurückstellen | Ingestion, Orchestrierung und Modelltraining bleiben außerhalb der UI |
 | August 2026 | Wikidata für Streckenreferenzpunkte verwenden | Für Wetter wird nur ein geprüfter globaler Streckenpunkt benötigt; die lokale OpenF1-Centerline bleibt für den Replay |
 | August 2026 | Replay-Leakage vor Predictions beheben | Referenzpace, Stints und Rundenfortschritt dürfen keine späteren Renninformationen vorwegnehmen |
-| August 2026 | Infrastruktur vor Berechnungen umsetzen | Nach dem Leakage-Fix folgen Weekend-Orchestrator, Wikidata, Open-Meteo und Calculation Snapshots |
+| August 2026 | Infrastruktur vor Berechnungen umsetzen | Weekend-Weather-Pipeline, vollständige Weekend-Ingestion und Silver-Facts kommen vor Replay-Härtung und Calculation Snapshots |
+| August 2026 | F1-Wikidata-Open-Meteo Weekend-Weather-Pipeline zuerst umsetzen | Die kleinste durchgängige Pipeline verifiziert Identitäten, Wetterpunkt, Snapshotablage und Fehlergrenzen vor vollständiger Weekend-Ingestion |
+| August 2026 | Online-Strategie und Boxenstoppfenster als MVP-Ausgabe | Der Algorithmus verarbeitet den zeitlich begrenzten Race State und liefert eine nachvollziehbare Empfehlung oder einen expliziten Leerzustand |
+| August 2026 | Wetterradar verwerfen | Forecast-Snapshots und Streckenbeobachtungen reichen für den transparenten MVP-Wetterpfad |
+| August 2026 | OpenF1-Endpoints nach Sessiontyp planen | Nicht anwendbare Endpoints dürfen keine vollständige Session fälschlich als Fehler markieren |
+| August 2026 | Lap- und Stint-Facts am abgeleiteten Rundenende freigeben | Rundenzeit und vollständiges Stintende dürfen nicht bereits am Runden- oder Stintstart sichtbar sein |
+| August 2026 | Location aus allgemeinen Silver-Facts ausschließen | Die hohe Datenmenge wird nur für Replay oder Geometrie geladen und nicht unnötig dupliziert |
+| August 2026 | Circuit-Identitäten als versionierte Registry laden | Neue Strecken erzeugen prüfbare Kandidaten und benötigen keinen Python-Sonderfall; unsichere oder nicht geprüfte Mappings bleiben gesperrt |
+| August 2026 | Sessionauswahl vor der Endpoint-Planung ausführen | Gesamtwochenende, einzelne Sessions und Sessiontypen verwenden dieselbe validierte Ingestion |
 
 ## 6. Forschungs- und Konkurrenzbetrachtung
 
@@ -152,7 +168,7 @@ Als methodische Vorbilder dienen insbesondere die klare Trennung von Datenpipeli
 
 Der Entwurf visualisiert die ursprüngliche Produktidee. Eine produktive Benutzeroberfläche wurde bewusst zugunsten der Datenpipeline zurückgestellt. Eine spätere kleine Oberfläche liest ausschließlich kuratierte Daten und Artefakte; sie führt keine Quellabfragen, Jobs oder Modelltrainings aus.
 
-Die spätere Übersichtsseite zeigt Rennkalender, Session-Auswahl, Fahrer- und Teamwertung, Siege, Podien und wenige einfache Tabellen. Die Replay-Seite zeigt die Fahrerliste mit Positionen, das Rennen auf der gespeicherten lokalen Streckenlinie, den zum Zeitpunkt verfügbaren Wetter-Forecast und Race-Control-Ereignisse. Circle of Doom, Regenradar, Boxenstoppfenster und aufwendige Sondervisualisierungen gehören nicht zur ersten Dashboard-Version.
+Die spätere Übersichtsseite zeigt Rennkalender, Session-Auswahl, Fahrer- und Teamwertung, Siege, Podien und wenige einfache Tabellen. Die Replay-Seite zeigt die Fahrerliste mit Positionen, das Rennen auf der gespeicherten lokalen Streckenlinie, den zum Zeitpunkt verfügbaren Wetter-Forecast, Race-Control-Ereignisse sowie die aktuelle Strategie- und Boxenstoppfenster-Empfehlung mit Annahmen und Alternativen. Aufwendige Sondervisualisierungen gehören nicht zur ersten Dashboard-Version.
 
 ### Erste Geometrieversuche
 

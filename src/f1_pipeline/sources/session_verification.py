@@ -12,7 +12,7 @@ from typing import Any, Protocol
 import pandas as pd
 import fastf1
 
-from f1_pipeline.data_validation import DataValidationError, validate_frame
+from f1_pipeline.data_validation import validate_frame
 from f1_pipeline.replay.circle_of_doom import (
     CircleOfDoomError,
     OpenF1Client,
@@ -20,7 +20,13 @@ from f1_pipeline.replay.circle_of_doom import (
     location_driver_cache_path,
     make_parquet_safe,
 )
-from f1_pipeline.settings import ARTIFACTS_DIR, CACHE_DIR, PROJECT_ROOT, RAW_DATA_DIR
+from f1_pipeline.settings import (
+    ARTIFACTS_DIR,
+    CACHE_DIR,
+    CURATED_DATA_DIR,
+    PROJECT_ROOT,
+    RAW_DATA_DIR,
+)
 
 TARGET_SEASON = 2026
 TARGET_COUNTRY = "Hungary"
@@ -116,11 +122,6 @@ CALENDAR_REQUIRED_COLUMNS: dict[str, frozenset[str]] = {
     "meetings": frozenset({"meeting_key", "meeting_name", "date_start", "date_end"}),
     "sessions": frozenset({"session_key", "meeting_key", "session_name", "date_start", "date_end"}),
 }
-UNIMPLEMENTED_SOURCES = (
-    "open_meteo",
-    "rainviewer",
-    "wikidata",
-)
 SOURCE_METADATA: dict[str, dict[str, Any]] = {
     "openf1": {
         "display_name": "OpenF1",
@@ -147,21 +148,14 @@ SOURCE_METADATA: dict[str, dict[str, Any]] = {
         "role": "weather_forecast",
         "used_for": ["point-in-time weather forecasts"],
         "boundary": "Forecast model data, not measured trackside observations.",
-        "implemented": False,
-    },
-    "rainviewer": {
-        "display_name": "RainViewer",
-        "role": "rain_radar_nowcast",
-        "used_for": ["radar precipitation", "short-term rain nowcast"],
-        "boundary": "Radar and nowcast precipitation, not temperature or tyre data.",
-        "implemented": False,
+        "implemented": True,
     },
     "wikidata": {
         "display_name": "Wikidata",
         "role": "circuit_coordinates",
         "used_for": ["validated circuit reference point", "weather request coordinates"],
         "boundary": "Geographic reference point, not track geometry or replay measurements.",
-        "implemented": False,
+        "implemented": True,
     },
 }
 
@@ -307,14 +301,42 @@ def _source_result(source: str, result: dict[str, Any]) -> dict[str, Any]:
     return {**SOURCE_METADATA[source], **result}
 
 
-def _unimplemented_source_results() -> dict[str, dict[str, Any]]:
-    return {
-        source: {
-            **SOURCE_METADATA[source],
-            "status": "not_implemented",
-            "details": "No executable adapter is available for this source yet.",
+def _weekend_weather_pipeline_source_results() -> dict[str, dict[str, Any]]:
+    manifests = sorted(
+        (CURATED_DATA_DIR / "manifests").glob("weekend_weather_pipeline_*.json"),
+        key=lambda path: path.stat().st_mtime,
+    )
+    if not manifests:
+        details = "No persisted weekend weather pipeline manifest is available."
+        return {
+            source: _source_result(
+                source,
+                {"status": "unavailable", "details": details},
+            )
+            for source in ("wikidata", "open_meteo")
         }
-        for source in UNIMPLEMENTED_SOURCES
+    manifest_path = manifests[-1]
+    try:
+        with manifest_path.open(encoding="utf-8") as stream:
+            manifest = json.load(stream)
+    except (OSError, ValueError) as exc:
+        details = f"Could not read weekend weather pipeline manifest: {exc}"
+        return {
+            source: _source_result(
+                source,
+                {"status": "unavailable", "details": details},
+            )
+            for source in ("wikidata", "open_meteo")
+        }
+    return {
+        source: _source_result(
+            source,
+            {
+                **manifest.get("jobs", {}).get(source, {}),
+                "manifest_path": _relative_path(manifest_path),
+            },
+        )
+        for source in ("wikidata", "open_meteo")
     }
 
 
@@ -597,7 +619,7 @@ def build_report(openf1_result: dict[str, Any]) -> dict[str, Any]:
         "openf1": _source_result("openf1", openf1_result),
         "fastf1": _source_result("fastf1", verify_fastf1()),
     }
-    sources.update(_unimplemented_source_results())
+    sources.update(_weekend_weather_pipeline_source_results())
     return {
         "schema_version": 1,
         "example": {

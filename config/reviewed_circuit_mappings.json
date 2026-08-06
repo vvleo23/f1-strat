@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "mappings": [
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 4,
+      "wikidata_entity_id": "Q171356",
+      "expected_label": "Hungaroring",
+      "expected_country": "Hungary",
+      "review_status": "reviewed"
+    }
+  ]
+}
+

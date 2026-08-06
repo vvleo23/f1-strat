@@ -1,6 +1,6 @@
 # Open-Meteo
 
-**Status:** Planned; no adapter or executable verification exists.
+**Status:** Implemented for one Hungary 2026 ECMWF IFS Single Run; scheduled future capture remains planned.
 
 [Open-Meteo](https://open-meteo.com/) provides global numerical weather-model data through consistent HTTP APIs. This project uses it for immutable point-in-time forecasts. OpenF1 and FastF1 weather remain separate session observations and evaluation references.
 
@@ -16,10 +16,10 @@
 
 The Single Runs `run` parameter is the model initialization time, not its public availability. Global models commonly need another four to six hours and regional models one to three hours before distribution. The pipeline therefore stores both `run_initialized_at` and `available_at`. A run is valid for a replay state only when `available_at <= decision_time`.
 
-## Planned data
+## Persisted weekend pipeline data
 
 - air temperature and relative humidity
-- precipitation, rain, and precipitation probability
+- precipitation and rain
 - cloud cover and weather code
 - wind speed and direction
 - surface pressure
@@ -29,6 +29,8 @@ The Single Runs `run` parameter is the model initialization time, not its public
 
 ## Snapshot jobs
 
+The implemented weekend weather pipeline loads the ECMWF IFS run initialized at `2026-07-26T00:00:00Z` for the Hungaroring. It stores 168 hourly rows, the immutable raw response, normalized Silver facts, hashes, and the exact request. The configured `available_at=2026-07-26T06:00:00Z` is a conservative documented-latency policy and not proof of an observed historical retrieval.
+
 - Store Weather Forecast API responses at approximately `T-24 h`, `T-6 h`, and `T-1 h` for each relevant session.
 - Read the validated WGS84 circuit point from curated Wikidata master data; never geocode a circuit or city name inside the weather job.
 - Batch required variables and locations to stay within provider limits.
@@ -36,7 +38,7 @@ The Single Runs `run` parameter is the model initialization time, not its public
 - For historical replay, select the latest proven available Single Run at `decision_time`.
 - Keep forecast values separate from OpenF1 and FastF1 observations when joining by `valid_time`.
 
-## Verification before use
+## Verification
 
 - Confirm bounded connectivity and the expected time arrays, variables, units, coordinates, and model.
 - Verify that `run_initialized_at`, `available_at`, `retrieved_at`, and `valid_time` are timezone-aware UTC values.
