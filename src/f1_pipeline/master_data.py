@@ -1,10 +1,8 @@
-"""Load the current season's Formula 1 master data from OpenF1."""
+"""Load a Formula 1 season's master data from OpenF1."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import re
 import shutil
 import tempfile
@@ -13,17 +11,17 @@ from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from f1_pipeline.data_validation import DataValidationError, validate_frame
-from f1_pipeline.persistence import atomic_parquet
+from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
 from f1_pipeline.settings import CURATED_DATA_DIR, RAW_DATA_DIR
+from f1_pipeline.sources.openf1 import (
+    OpenF1Client as SharedOpenF1Client,
+    season_cache_path,
+)
 
-BASE_URL = "https://api.openf1.org/v1"
-REQUEST_TIMEOUT_SECONDS = 90
 SCHEMA_VERSION = 1
+LEGACY_DIMENSION_SEASON = 2026
 
 TABLE_COLUMNS: dict[str, list[str]] = {
     "country": [
@@ -173,12 +171,16 @@ MASTER_KEY_COLUMNS = {
 MASTER_REQUIRED_NON_NULL = {
     "country": ("country_id", "country_name", "source_system", "source_record_key", "ingested_at"),
     "circuit": ("circuit_id", "circuit_name", "country_id", "source_system", "source_record_key", "ingested_at"),
-    "circuit_geometry": ("geometry_id", "circuit_id", "geometry_type", "source_system", "source_record_key", "ingested_at"),
-    "driver": ("driver_id", "season_id", "driver_number", "name_acronym", "full_name", "team_id", "source_system", "source_record_key", "ingested_at"),
+    "circuit_geometry": ("geometry_id", "circuit_id", "geometry_type", "source_system", "source_record_key",
+                         "ingested_at"),
+    "driver": ("driver_id", "season_id", "driver_number", "name_acronym", "full_name", "team_id", "source_system",
+               "source_record_key", "ingested_at"),
     "team": ("team_id", "team_name", "season_id", "source_system", "source_record_key", "ingested_at"),
     "season": ("season_id", "year", "source_system", "source_record_key", "ingested_at"),
-    "meeting": ("meeting_id", "season_id", "meeting_name", "country_id", "circuit_id", "status", "source_system", "source_record_key", "ingested_at"),
-    "session": ("session_id", "meeting_id", "season_id", "session_type", "session_name", "status", "source_system", "source_record_key", "ingested_at"),
+    "meeting": ("meeting_id", "season_id", "meeting_name", "country_id", "circuit_id", "status", "source_system",
+                "source_record_key", "ingested_at"),
+    "session": ("session_id", "meeting_id", "season_id", "session_type", "session_name", "status", "source_system",
+                "source_record_key", "ingested_at"),
 }
 
 MASTER_ALLOWED_STATUSES = {"scheduled", "completed", "cancelled", "postponed"}
@@ -188,59 +190,9 @@ class MasterDataError(RuntimeError):
     """Describe an error while loading or validating master data."""
 
 
-class OpenF1Client:
-    """Fetch OpenF1 data with system trust and transient-error retries."""
-
+class OpenF1Client(SharedOpenF1Client):
     def __init__(self) -> None:
-        self._enable_system_trust_store()
-        retry = Retry(
-            total=4,
-            connect=4,
-            read=4,
-            status=4,
-            backoff_factor=1.0,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset({"GET"}),
-            respect_retry_after_header=True,
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        self.session = requests.Session()
-        self.session.mount("https://", adapter)
-        self.session.headers.update({"User-Agent": "f1-event-pipeline/1.0"})
-
-    @staticmethod
-    def _enable_system_trust_store() -> None:
-        try:
-            import truststore
-        except ImportError as exc:
-            raise MasterDataError(
-                "The 'truststore' package is missing. Run 'pip install -r requirements.txt'."
-            ) from exc
-        truststore.inject_into_ssl()
-
-    def get_json(self, endpoint: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        url = f"{BASE_URL}/{endpoint.lstrip('/')}"
-        try:
-            response = self.session.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            payload = response.json()
-        except requests.exceptions.Timeout as exc:
-            raise MasterDataError(f"Request timed out for endpoint '{endpoint}'.") from exc
-        except requests.exceptions.JSONDecodeError as exc:
-            raise MasterDataError(f"Endpoint '{endpoint}' did not return valid JSON.") from exc
-        except requests.exceptions.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else "unknown"
-            raise MasterDataError(
-                f"OpenF1 returned HTTP {status} for endpoint '{endpoint}'."
-            ) from exc
-        except requests.exceptions.RequestException as exc:
-            raise MasterDataError(f"Network error for endpoint '{endpoint}': {exc}") from exc
-
-        if not isinstance(payload, list) or not all(isinstance(row, dict) for row in payload):
-            raise MasterDataError(f"Unexpected response format for endpoint '{endpoint}'.")
-        if not payload:
-            raise MasterDataError(f"Endpoint '{endpoint}' returned no data for {params}.")
-        return payload
+        super().__init__(error_type=MasterDataError, user_agent="f1-strat/1.0")
 
 
 def _slug(value: Any) -> str:
@@ -256,7 +208,7 @@ def _source_id(kind: str, value: Any) -> str:
     return f"openf1:{kind}:{value}"
 
 
-def _timestamp(value: Any) -> pd.Timestamp | pd.NaT:
+def _timestamp(value: Any):
     if value is None or pd.isna(value) or value == "":
         return pd.NaT
     parsed = pd.to_datetime(value, utc=True, errors="coerce")
@@ -310,8 +262,8 @@ def _meeting_replacements(meetings: list[dict[str, Any]]) -> dict[int, int]:
             row
             for row in active
             if row.get("meeting_name") == cancelled.get("meeting_name")
-            and _timestamp_sort_key(row.get("date_start"))
-            > _timestamp_sort_key(cancelled.get("date_start"))
+               and _timestamp_sort_key(row.get("date_start"))
+               > _timestamp_sort_key(cancelled.get("date_start"))
         ]
         candidates.sort(key=lambda row: _timestamp_sort_key(row.get("date_start")))
         if candidates:
@@ -327,32 +279,26 @@ def _status(row: dict[str, Any], as_of: pd.Timestamp, postponed: bool = False) -
 
 
 def choose_roster_session(
-    sessions: list[dict[str, Any]], as_of: pd.Timestamp
+        sessions: list[dict[str, Any]], as_of: pd.Timestamp
 ) -> dict[str, Any]:
     races = [
         row
         for row in sessions
         if str(row.get("session_type", "")).lower() == "race"
-        and not _bool(row.get("is_cancelled"))
+           and not _bool(row.get("is_cancelled"))
     ]
     completed = [
-        row for row in races if not pd.isna(_timestamp(row.get("date_end"))) and _timestamp(row.get("date_end")) <= as_of
+        row for row in races if
+        not pd.isna(_timestamp(row.get("date_end"))) and _timestamp(row.get("date_end")) <= as_of
     ]
     candidates = completed or races
     if not candidates:
         candidates = [row for row in sessions if not _bool(row.get("is_cancelled"))]
     if not candidates:
-        raise MasterDataError("No non-cancelled 2026 session is available for the driver roster.")
+        raise MasterDataError("No non-cancelled session is available for the driver roster.")
     if completed:
         return max(candidates, key=lambda row: _timestamp_sort_key(row.get("date_end")))
     return min(candidates, key=lambda row: _timestamp_sort_key(row.get("date_start")))
-
-
-def _raw_path(season: int, endpoint: str, suffix: str | None = None) -> Path:
-    name = f"openf1_{season}_{endpoint}"
-    if suffix:
-        name += f"_{suffix}"
-    return RAW_DATA_DIR / f"{name}.parquet"
 
 
 def _raw_snapshot_path(path: Path, ingested_at: pd.Timestamp) -> Path:
@@ -363,12 +309,12 @@ def _raw_snapshot_path(path: Path, ingested_at: pd.Timestamp) -> Path:
 
 
 def _load_or_fetch(
-    client: OpenF1Client,
-    endpoint: str,
-    params: dict[str, Any],
-    path: Path,
-    refresh: bool,
-    ingested_at: pd.Timestamp,
+        client: OpenF1Client,
+        endpoint: str,
+        params: dict[str, Any],
+        path: Path,
+        refresh: bool,
+        ingested_at: pd.Timestamp,
 ) -> tuple[list[dict[str, Any]], bool, Path]:
     if path.exists() and not refresh:
         records = pd.read_parquet(path).to_dict(orient="records")
@@ -403,27 +349,17 @@ def _table_frame(name: str, records: list[dict[str, Any]]) -> pd.DataFrame:
     return frame
 
 
-def _write_table(name: str, records: list[dict[str, Any]]) -> Path:
-    target_dir = CURATED_DATA_DIR / "dimensions"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / f"{name}.parquet"
+def master_table_path(name: str, season: int) -> Path:
+    return CURATED_DATA_DIR / "dimensions" / f"season={season}" / f"{name}.parquet"
+
+
+def _write_table(name: str, records: list[dict[str, Any]], season: int) -> Path:
+    target = master_table_path(name, season)
     frame = _table_frame(name, records)
-    with tempfile.NamedTemporaryFile(dir=target_dir, suffix=".parquet", delete=False) as temporary:
-        temporary_path = Path(temporary.name)
-    try:
-        frame.to_parquet(temporary_path, index=False)
-        temporary_path.replace(target)
-    finally:
-        temporary_path.unlink(missing_ok=True)
+    atomic_parquet(frame, target)
+    if season == LEGACY_DIMENSION_SEASON:
+        atomic_parquet(frame, CURATED_DATA_DIR / "dimensions" / f"{name}.parquet")
     return target
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _validate_master_frames(frames: dict[str, pd.DataFrame]) -> None:
@@ -475,11 +411,6 @@ def _validate_master_frames(frames: dict[str, pd.DataFrame]) -> None:
         raise MasterDataError("Circuit geometry references an unknown circuit.")
 
 
-def _validate_tables(tables: dict[str, list[dict[str, Any]]]) -> None:
-    frames = {name: _table_frame(name, records) for name, records in tables.items()}
-    _validate_master_frames(frames)
-
-
 def validate_persisted_tables(table_paths: dict[str, Path]) -> dict[str, int]:
     """Validate curated Parquet schemas and return verified row counts."""
     frames: dict[str, pd.DataFrame] = {}
@@ -508,13 +439,13 @@ def _load_existing_geometry() -> list[dict[str, Any]]:
 
 
 def build_tables(
-    meetings: list[dict[str, Any]],
-    sessions: list[dict[str, Any]],
-    drivers: list[dict[str, Any]],
-    season: int,
-    ingested_at: pd.Timestamp,
-    roster_session_key: int,
-    circuit_geometry: list[dict[str, Any]] | None = None,
+        meetings: list[dict[str, Any]],
+        sessions: list[dict[str, Any]],
+        drivers: list[dict[str, Any]],
+        season: int,
+        ingested_at: pd.Timestamp,
+        roster_session_key: int,
+        circuit_geometry: list[dict[str, Any]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     season_id = f"f1:season:{season}"
     replacements = _meeting_replacements(meetings)
@@ -584,12 +515,8 @@ def build_tables(
         )
 
     meeting_status = {
-        int(row["meeting_key"]): next(
-            record["status"]
-            for record in meeting_records
-            if record["meeting_id"] == _meeting_id(row)
-        )
-        for row in meetings
+        int(row["meeting_key"]): record["status"]
+        for row, record in zip(meetings, meeting_records)
     }
     session_replacements: dict[int, int] = {}
     for row in sessions:
@@ -601,9 +528,9 @@ def build_tables(
             candidate
             for candidate in sessions
             if candidate.get("meeting_key") is not None
-            and int(candidate["meeting_key"]) == replacement_meeting
-            and candidate.get("session_type") == row.get("session_type")
-            and candidate.get("session_name") == row.get("session_name")
+               and int(candidate["meeting_key"]) == replacement_meeting
+               and candidate.get("session_type") == row.get("session_type")
+               and candidate.get("session_name") == row.get("session_name")
         ]
         if candidates:
             session_replacements[int(row["session_key"])] = int(candidates[0]["session_key"])
@@ -698,29 +625,35 @@ def build_tables(
         "meeting": sorted(meeting_records, key=lambda row: row["meeting_id"]),
         "session": sorted(session_records, key=lambda row: row["session_id"]),
     }
-    _validate_tables(tables)
+    _validate_master_frames(
+        {name: _table_frame(name, records) for name, records in tables.items()}
+    )
     return tables
 
 
-def load_master_data(season: int = 2026, refresh: bool = False) -> dict[str, Path]:
+def load_master_data(
+        season: int = 2026,
+        refresh: bool = False,
+        client: OpenF1Client | None = None,
+) -> dict[str, Path]:
     """Load and persist the requested season's master data."""
     ingested_at = pd.Timestamp(datetime.now(timezone.utc))
-    client = OpenF1Client()
-    meeting_path = _raw_path(season, "meetings")
-    session_path = _raw_path(season, "sessions")
+    api = client or OpenF1Client()
+    meeting_path = season_cache_path(season, "meetings")
+    session_path = season_cache_path(season, "sessions")
     meetings, meeting_fetched, meeting_input_path = _load_or_fetch(
-        client, "meetings", {"year": season}, meeting_path, refresh, ingested_at
+        api, "meetings", {"year": season}, meeting_path, refresh, ingested_at
     )
     sessions, session_fetched, session_input_path = _load_or_fetch(
-        client, "sessions", {"year": season}, session_path, refresh, ingested_at
+        api, "sessions", {"year": season}, session_path, refresh, ingested_at
     )
     if not meetings or not sessions:
         raise MasterDataError(f"No OpenF1 calendar data found for season {season}.")
     roster_session = choose_roster_session(sessions, ingested_at)
     roster_key = int(roster_session["session_key"])
-    driver_path = _raw_path(season, "drivers", str(roster_key))
+    driver_path = season_cache_path(season, "drivers", str(roster_key))
     drivers, drivers_fetched, driver_input_path = _load_or_fetch(
-        client,
+        api,
         "drivers",
         {"session_key": roster_key},
         driver_path,
@@ -737,13 +670,15 @@ def load_master_data(season: int = 2026, refresh: bool = False) -> dict[str, Pat
         circuit_geometry=_load_existing_geometry(),
     )
     for fetched, snapshot_path, latest_path in (
-        (meeting_fetched, meeting_input_path, meeting_path),
-        (session_fetched, session_input_path, session_path),
-        (drivers_fetched, driver_input_path, driver_path),
+            (meeting_fetched, meeting_input_path, meeting_path),
+            (session_fetched, session_input_path, session_path),
+            (drivers_fetched, driver_input_path, driver_path),
     ):
         if fetched:
             _commit_raw_snapshot(snapshot_path, latest_path)
-    output_paths = {name: _write_table(name, records) for name, records in tables.items()}
+    output_paths = {
+        name: _write_table(name, records, season) for name, records in tables.items()
+    }
     verified_row_counts = validate_persisted_tables(output_paths)
 
     raw_inputs = [
@@ -764,7 +699,7 @@ def load_master_data(season: int = 2026, refresh: bool = False) -> dict[str, Pat
                 "path": str(path.relative_to(RAW_DATA_DIR.parent.parent)),
                 "fetched": fetched,
                 "row_count": len(pd.read_parquet(path)),
-                "sha256": _sha256(path),
+                "sha256": sha256(path),
             }
             for endpoint, params, path, fetched in raw_inputs
         ],
@@ -788,18 +723,8 @@ def load_master_data(season: int = 2026, refresh: bool = False) -> dict[str, Pat
         },
     }
     manifest_dir = CURATED_DATA_DIR / "manifests"
-    manifest_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = manifest_dir / f"master_data_{season}.json"
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=manifest_dir, suffix=".json", delete=False
-    ) as temporary:
-        temporary_path = Path(temporary.name)
-        json.dump(manifest, temporary, indent=2, ensure_ascii=False)
-        temporary.write("\n")
-    try:
-        temporary_path.replace(manifest_path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
+    atomic_json(manifest, manifest_path)
     output_paths["manifest"] = manifest_path
     return output_paths
 
@@ -821,4 +746,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

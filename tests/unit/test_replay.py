@@ -13,11 +13,11 @@ from f1_pipeline.replay.circle_of_doom import (
     DEFAULT_MAX_STALENESS_SECONDS,
     PLAYBACK_SPEEDS,
     CarState,
-    _xy_for_progress,
     build_animation_post_script,
     build_location_progress,
     build_replay,
     create_figure,
+    estimate_reference_lap_time,
     infer_race_window,
     make_parquet_safe,
     parse_openf1_datetimes,
@@ -53,6 +53,19 @@ class CircleOfDoomTest(unittest.TestCase):
 
         self.assertEqual(safe["gap_to_leader"].tolist(), ["0", "12.5", "+1 LAP", None])
         self.assertEqual(safe["interval"].tolist(), ["0.0", "2.5", "5.0", None])
+
+    def test_reference_lap_time_allows_missing_pit_out_column(self) -> None:
+        laps = pd.DataFrame(
+            {
+                "driver_number": [1, 2],
+                "lap_number": [5, 5],
+                "lap_duration": [90.0, 92.0],
+            }
+        )
+
+        reference = estimate_reference_lap_time(laps, pd.DataFrame())
+
+        self.assertAlmostEqual(reference, 90.5)
 
     def test_parse_lap_deficit(self) -> None:
         self.assertEqual(parse_lap_deficit("+1 LAP"), 1)
@@ -105,15 +118,6 @@ class CircleOfDoomTest(unittest.TestCase):
         self.assertEqual(projection.gap_ahead, 5.0)
         self.assertEqual(projection.behind, "BHD")
         self.assertEqual(projection.gap_behind, 5.0)
-
-    def test_round_clock_places_start_top_and_halfway_bottom(self) -> None:
-        start_x, start_y = _xy_for_progress(0.0)
-        halfway_x, halfway_y = _xy_for_progress(0.5)
-
-        self.assertAlmostEqual(start_x, 0.0, places=7)
-        self.assertAlmostEqual(start_y, 1.0, places=7)
-        self.assertAlmostEqual(halfway_x, 0.0, places=7)
-        self.assertAlmostEqual(halfway_y, -1.0, places=7)
 
     def test_location_progress_uses_geometric_distance(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
@@ -379,10 +383,10 @@ class CircleOfDoomTest(unittest.TestCase):
                 }
                 for driver in (1, 2, 3)
                 for date, distance in (
-                    (start, 0),
-                    (start + (finish - start) / 2, 10),
-                    (finish, 20),
-                )
+                (start, 0),
+                (start + (finish - start) / 2, 10),
+                (finish, 20),
+            )
             ]
         )
         race_control = pd.DataFrame(
@@ -434,6 +438,3 @@ class CircleOfDoomTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

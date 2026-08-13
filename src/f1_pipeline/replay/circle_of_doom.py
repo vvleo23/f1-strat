@@ -7,7 +7,6 @@ import json
 import math
 import re
 import sys
-import time
 import webbrowser
 from dataclasses import dataclass
 from datetime import timedelta
@@ -17,9 +16,6 @@ from typing import Any, Iterable, cast
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from f1_pipeline.geometry import (
     TrackGeometry,
@@ -28,9 +24,15 @@ from f1_pipeline.geometry import (
     point_at_progress,
     synthetic_track_geometry,
 )
-from f1_pipeline.settings import ARTIFACTS_DIR, RAW_DATA_DIR
+from f1_pipeline.settings import ARTIFACTS_DIR
+from f1_pipeline.sources.openf1 import (
+    OpenF1Client as SharedOpenF1Client,
+    location_driver_cache_path,
+    make_parquet_safe,
+    session_cache_path as cache_path,
+    write_latest_parquet,
+)
 
-BASE_URL = "https://api.openf1.org/v1"
 DEFAULT_SESSION_KEY = 11334
 DEFAULT_FOCUS_DRIVER = "ANT"
 DEFAULT_GREEN_PIT_LOSS_SECONDS = 20.0
@@ -38,9 +40,6 @@ DEFAULT_NEUTRALIZED_PIT_LOSS_SECONDS = 12.0
 DEFAULT_FRAME_SECONDS = 4
 DEFAULT_MAX_STALENESS_SECONDS = 8
 PLAYBACK_SPEEDS = (1, 2, 5, 10)
-REQUEST_TIMEOUT_SECONDS = 90
-# Community limit: no more than 30 requests per minute.
-MIN_REQUEST_INTERVAL_SECONDS = 2.1
 DATASET_ENDPOINTS = (
     "sessions",
     "drivers",
@@ -125,121 +124,16 @@ class ReplayResult:
     race_end: pd.Timestamp
 
 
-class OpenF1Client:
-    """Kleiner OpenF1-Client mit Retries, Backoff und Rate-Limit-Abstand."""
-
+class OpenF1Client(SharedOpenF1Client):
     def __init__(self) -> None:
-        self._enable_system_trust_store()
-        retry = Retry(
-            total=4,
-            connect=4,
-            read=4,
-            status=4,
-            backoff_factor=1.0,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset({"GET"}),
-            respect_retry_after_header=True,
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        self.session = requests.Session()
-        self.session.mount("https://", adapter)
-        self.session.headers.update({"User-Agent": "f1-event-pipeline/1.0"})
-        self._last_request_at = 0.0
-
-    @staticmethod
-    def _enable_system_trust_store() -> None:
-        try:
-            import truststore
-        except ImportError as exc:
-            raise CircleOfDoomError(
-                "The 'truststore' package is missing. Run 'pip install -r requirements.txt'."
-            ) from exc
-        truststore.inject_into_ssl()
-
-    def get_json(self, endpoint: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """Fetch an OpenF1 endpoint securely and validate its response."""
-        elapsed = time.monotonic() - self._last_request_at
-        if elapsed < MIN_REQUEST_INTERVAL_SECONDS:
-            time.sleep(MIN_REQUEST_INTERVAL_SECONDS - elapsed)
-
-        url = f"{BASE_URL}/{endpoint.lstrip('/')}"
-        try:
-            response: requests.Response | None = None
-            for attempt in range(3):
-                response = self.session.get(
-                    url, params=params, timeout=REQUEST_TIMEOUT_SECONDS
-                )
-                self._last_request_at = time.monotonic()
-                if response.status_code != 422 or endpoint != "location":
-                    break
-                if attempt < 2:
-                    wait_seconds = 5 * (attempt + 1)
-                    print(
-                        f"location temporarily rejected; retrying in {wait_seconds}s ..."
-                    )
-                    time.sleep(wait_seconds)
-            assert response is not None
-            response.raise_for_status()
-            payload = response.json()
-        except requests.exceptions.SSLError as exc:
-            raise CircleOfDoomError(
-                "TLS certificate validation for OpenF1 failed. "
-                "The system certificate store could not validate the connection."
-            ) from exc
-        except requests.exceptions.Timeout as exc:
-            raise CircleOfDoomError(
-                f"Request timed out while fetching endpoint '{endpoint}'."
-            ) from exc
-        except requests.exceptions.JSONDecodeError as exc:
-            raise CircleOfDoomError(
-                f"OpenF1 endpoint '{endpoint}' did not return valid JSON."
-            ) from exc
-        except requests.exceptions.HTTPError as exc:
-            status = exc.response.status_code if exc.response is not None else "unbekannt"
-            raise CircleOfDoomError(
-                f"OpenF1 returned HTTP {status} for endpoint '{endpoint}'."
-            ) from exc
-        except requests.exceptions.RequestException as exc:
-            raise CircleOfDoomError(
-                f"Network error while fetching endpoint '{endpoint}': {exc}"
-            ) from exc
-
-        if not isinstance(payload, list) or not all(isinstance(row, dict) for row in payload):
-            raise CircleOfDoomError(
-                f"Unexpected response format from OpenF1 endpoint '{endpoint}'."
-            )
-        return payload
-
-
-def cache_path(session_key: int, endpoint: str) -> Path:
-    """Return the Parquet cache path for an OpenF1 dataset."""
-    return RAW_DATA_DIR / f"openf1_{session_key}_{endpoint}.parquet"
-
-
-def location_driver_cache_path(session_key: int, driver_number: int) -> Path:
-    """Return the resumable location cache path for a driver."""
-    return RAW_DATA_DIR / (
-        f"openf1_{session_key}_location_driver_{driver_number}.parquet"
-    )
-
-
-def make_parquet_safe(endpoint: str, frame: pd.DataFrame) -> pd.DataFrame:
-    """Normalisiert OpenF1-Spalten, die Zahlen und Statusstrings mischen."""
-    safe = frame.copy()
-    if endpoint == "intervals":
-        for column in ("gap_to_leader", "interval"):
-            if column in safe.columns:
-                safe[column] = safe[column].map(
-                    lambda value: None if pd.isna(value) else str(value)
-                )
-    return safe
+        super().__init__(error_type=CircleOfDoomError, user_agent="f1-strat/1.0")
 
 
 def load_session_datasets(
-    session_key: int,
-    *,
-    refresh: bool = False,
-    client: OpenF1Client | None = None,
+        session_key: int,
+        *,
+        refresh: bool = False,
+        client: OpenF1Client | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Load all replay datasets from the cache or OpenF1."""
     api = client or OpenF1Client()
@@ -274,7 +168,7 @@ def load_session_datasets(
                         driver_frame = make_parquet_safe(
                             endpoint, pd.DataFrame(driver_payload)
                         )
-                        driver_frame.to_parquet(driver_path, index=False)
+                        write_latest_parquet(driver_frame, driver_path)
                         driver_source = "OpenF1"
                     print(
                         f"location: Driver {driver_number} "
@@ -286,7 +180,7 @@ def load_session_datasets(
             else:
                 payload = api.get_json(endpoint, {"session_key": session_key})
                 frame = make_parquet_safe(endpoint, pd.DataFrame(payload))
-            frame.to_parquet(path, index=False)
+            write_latest_parquet(frame, path)
             source = "OpenF1"
         datasets[endpoint] = frame
         print(f"{endpoint}: {len(frame):,} rows ({source})")
@@ -341,7 +235,7 @@ def parse_openf1_datetimes(values: pd.Series) -> pd.Series:
 
 
 def infer_race_window(
-    laps: pd.DataFrame, race_control: pd.DataFrame
+        laps: pd.DataFrame, race_control: pd.DataFrame
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
     """Infer the actual race start and end from race control and laps."""
     parsed_laps = laps.copy()
@@ -400,12 +294,15 @@ def estimate_reference_lap_time(laps: pd.DataFrame, pits: pd.DataFrame) -> float
             excluded.add((driver, lap))
             excluded.add((driver, lap + 1))
 
+    pit_out_laps = working.get(
+        "is_pit_out_lap", pd.Series(False, index=working.index)
+    ).fillna(False).astype(bool)
     valid = working[
         working["lap_duration"].notna()
         & working["lap_duration"].between(60, 240)
         & working["lap_number"].ge(5)
-        & ~working.get("is_pit_out_lap", False).fillna(False).astype(bool)
-    ].copy()
+        & ~pit_out_laps
+        ].copy()
     if excluded:
         keys = list(zip(valid["driver_number"].astype(int), valid["lap_number"].astype(int)))
         valid = valid[[key not in excluded for key in keys]]
@@ -420,9 +317,9 @@ def estimate_reference_lap_time(laps: pd.DataFrame, pits: pd.DataFrame) -> float
 
 
 def status_events(
-    race_control: pd.DataFrame,
-    race_start: pd.Timestamp,
-    laps: pd.DataFrame | None = None,
+        race_control: pd.DataFrame,
+        race_start: pd.Timestamp,
+        laps: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Build a compact status timeline for GREEN, SC, VSC, and RED."""
     events: list[dict[str, Any]] = [{"status_at": race_start, "status": "GREEN"}]
@@ -483,7 +380,7 @@ def status_events(
 
 
 def reconstruct_absolute_gaps(
-    rows: pd.DataFrame, reference_lap_time: float
+        rows: pd.DataFrame, reference_lap_time: float
 ) -> list[dict[str, Any]]:
     """Reconstruct absolute gaps, including lapped cars."""
     records = cast(list[dict[str, Any]], rows.to_dict("records"))
@@ -531,10 +428,10 @@ def reconstruct_absolute_gaps(
 
 
 def project_pit_exit(
-    cars: Iterable[CarState],
-    focus_driver: int,
-    pit_loss: float,
-    reference_lap_time: float,
+        cars: Iterable[CarState],
+        focus_driver: int,
+        pit_loss: float,
+        reference_lap_time: float,
 ) -> PitProjection | None:
     """Projiziert Position und direkte Nachbarn nach einem sofortigen Stopp."""
     car_list = sorted(cars, key=lambda car: car.absolute_gap)
@@ -544,8 +441,8 @@ def project_pit_exit(
 
     projected_gap = focus.absolute_gap + pit_loss
     projected_progress = (
-        focus.lap_progress - pit_loss / reference_lap_time
-    ) % 1.0
+                                 focus.lap_progress - pit_loss / reference_lap_time
+                         ) % 1.0
     others = [car for car in car_list if car.driver_number != focus_driver]
     ahead_candidates = [car for car in others if car.absolute_gap <= projected_gap]
     behind_candidates = [car for car in others if car.absolute_gap > projected_gap]
@@ -652,11 +549,11 @@ def build_location_progress(location: pd.DataFrame, laps: pd.DataFrame) -> pd.Da
 
 
 def _prepare_asof_grid(
-    datasets: dict[str, pd.DataFrame],
-    race_start: pd.Timestamp,
-    race_end: pd.Timestamp,
-    frame_seconds: int,
-    max_staleness_seconds: int,
+        datasets: dict[str, pd.DataFrame],
+        race_start: pd.Timestamp,
+        race_end: pd.Timestamp,
+        frame_seconds: int,
+        max_staleness_seconds: int,
 ) -> pd.DataFrame:
     """Align all inputs to a shared replay timeline."""
     driver_numbers = sorted(datasets["drivers"]["driver_number"].astype(int).unique())
@@ -776,7 +673,7 @@ def _build_stint_lookup(stints: pd.DataFrame) -> dict[int, list[dict[str, Any]]]
 
 
 def _tyre_at_lap(
-    stint_lookup: dict[int, list[dict[str, Any]]], driver: int, lap: int
+        stint_lookup: dict[int, list[dict[str, Any]]], driver: int, lap: int
 ) -> tuple[str | None, int | None]:
     for stint in stint_lookup.get(driver, []):
         start = int(stint.get("lap_start") or 0)
@@ -791,13 +688,13 @@ def _tyre_at_lap(
 
 
 def build_replay(
-    datasets: dict[str, pd.DataFrame],
-    *,
-    focus_driver: int,
-    green_pit_loss: float,
-    neutralized_pit_loss: float,
-    frame_seconds: int,
-    max_staleness_seconds: int,
+        datasets: dict[str, pd.DataFrame],
+        *,
+        focus_driver: int,
+        green_pit_loss: float,
+        neutralized_pit_loss: float,
+        frame_seconds: int,
+        max_staleness_seconds: int,
 ) -> ReplayResult:
     """Reconstruct all race replay frames without future measurements."""
     if frame_seconds <= 0:
@@ -834,7 +731,7 @@ def build_replay(
     for date, snapshot in grid.groupby("date", sort=True):
         active = snapshot[
             snapshot["observed_at"].notna() & snapshot["track_progress"].notna()
-        ].copy()
+            ].copy()
         if active.empty:
             continue
         reconstructed = reconstruct_absolute_gaps(active, reference_lap_time)
@@ -918,34 +815,24 @@ def resolve_driver_number(drivers: pd.DataFrame, selector: str) -> int:
     )
 
 
-def _angle_for_progress(progress: float) -> float:
-    """Ordnet 0 % oben, 25 % rechts, 50 % unten und 75 % links an."""
-    return math.pi / 2 - 2 * math.pi * (progress % 1.0)
-
-
-def _xy_for_progress(progress: float, radius: float = 1.0) -> tuple[float, float]:
-    angle = _angle_for_progress(progress)
-    return radius * math.cos(angle), radius * math.sin(angle)
-
-
 def _projection_description(projection: PitProjection | None) -> str:
     if projection is None:
         return "No current projection"
     neighbours: list[str] = []
-    if projection.ahead:
+    if projection.ahead and projection.gap_ahead is not None:
         neighbours.append(f"{projection.gap_ahead:.1f}s behind {projection.ahead}")
-    if projection.behind:
+    if projection.behind and projection.gap_behind is not None:
         neighbours.append(f"{projection.gap_behind:.1f}s ahead of {projection.behind}")
     return " · ".join(neighbours) if neighbours else "No direct neighbours"
 
 
 def _frame_traces(
-    frame: ReplayFrame,
-    reference_lap_time: float,
-    focus_driver: int,
-    driver_order: tuple[int, ...] | None = None,
-    geometry: TrackGeometry | None = None,
-) -> tuple[go.Scatter, go.Scatter, go.Scatter]:
+        frame: ReplayFrame,
+        reference_lap_time: float,
+        focus_driver: int,
+        driver_order: tuple[int, ...] | None = None,
+        geometry: TrackGeometry | None = None,
+) -> tuple[go.Scattergl, go.Scattergl, go.Scatter]:
     track_geometry = geometry or synthetic_track_geometry()
     x: list[float | None] = []
     y: list[float | None] = []
@@ -1064,9 +951,9 @@ def _frame_traces(
 
 
 def _frame_title(
-    frame: ReplayFrame,
-    focus_acronym: str,
-    geometry_label: str = "synthetic circle fallback",
+        frame: ReplayFrame,
+        focus_acronym: str,
+        geometry_label: str = "synthetic circle fallback",
 ) -> str:
     projection = frame.projection
     clock = frame.date.strftime("%H:%M:%S UTC")
@@ -1092,10 +979,10 @@ def _replay_driver_order(replay: ReplayResult) -> tuple[int, ...]:
 
 
 def build_animation_post_script(
-    replay: ReplayResult,
-    *,
-    frame_seconds: int,
-    geometry: TrackGeometry | None = None,
+        replay: ReplayResult,
+        *,
+        frame_seconds: int,
+        geometry: TrackGeometry | None = None,
 ) -> str:
     """Create WebGL interpolation and playback controls for the HTML output."""
     track_geometry = geometry or synthetic_track_geometry()
@@ -1333,12 +1220,12 @@ def build_animation_post_script(
 
 
 def create_figure(
-    replay: ReplayResult,
-    *,
-    focus_driver: int,
-    focus_acronym: str,
-    frame_seconds: int,
-    geometry: TrackGeometry | None = None,
+        replay: ReplayResult,
+        *,
+        focus_driver: int,
+        focus_acronym: str,
+        frame_seconds: int,
+        geometry: TrackGeometry | None = None,
 ) -> go.Figure:
     """Create the interactive Plotly animation."""
     track_geometry = geometry or synthetic_track_geometry()
@@ -1633,12 +1520,12 @@ def main(argv: list[str] | None = None) -> int:
             webbrowser.open(output.as_uri())
         return 0
     except (
-        CircleOfDoomError,
-        TrackGeometryError,
-        KeyError,
-        TypeError,
-        ValueError,
-        OSError,
+            CircleOfDoomError,
+            TrackGeometryError,
+            KeyError,
+            TypeError,
+            ValueError,
+            OSError,
     ) as exc:
         print(f"Circle of Doom error: {exc}", file=sys.stderr)
         return 1
@@ -1646,6 +1533,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-

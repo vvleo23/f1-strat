@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -13,12 +12,13 @@ import pandas as pd
 import fastf1
 
 from f1_pipeline.data_validation import validate_frame
-from f1_pipeline.replay.circle_of_doom import (
-    CircleOfDoomError,
+from f1_pipeline.persistence import atomic_json, atomic_parquet
+from f1_pipeline.sources.openf1 import (
     OpenF1Client,
-    cache_path,
+    OpenF1Error,
     location_driver_cache_path,
     make_parquet_safe,
+    session_cache_path as cache_path,
 )
 from f1_pipeline.settings import (
     ARTIFACTS_DIR,
@@ -43,6 +43,7 @@ def _relative_path(path: Path) -> str:
         return str(path.resolve().relative_to(PROJECT_ROOT.resolve()))
     except ValueError:
         return str(path)
+
 
 SESSION_ENDPOINTS = (
     "sessions",
@@ -170,7 +171,7 @@ class JsonClient(Protocol):
 
 
 def _validate_endpoint_frame(
-    endpoint: str, frame: pd.DataFrame, session_key: int
+        endpoint: str, frame: pd.DataFrame, session_key: int
 ) -> None:
     validate_frame(
         frame,
@@ -235,7 +236,7 @@ def select_hungary_meeting(meetings: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def select_hungary_race(
-    sessions: list[dict[str, Any]], meeting_key: int,
+        sessions: list[dict[str, Any]], meeting_key: int,
 ) -> dict[str, Any]:
     candidates = []
     for session in sessions:
@@ -258,43 +259,6 @@ def select_hungary_race(
     if candidates[0].get("session_key") is None:
         raise SessionVerificationError("The Hungarian race has no session_key.")
     return candidates[0]
-
-
-def _atomic_parquet(frame: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=path.parent, prefix=f".{path.name}.", suffix=".parquet", delete=False
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-        assert temporary_path is not None
-        frame.to_parquet(temporary_path, index=False)
-        temporary_path.replace(path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-
-
-def _atomic_json(payload: dict[str, Any], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".json",
-            delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            json.dump(payload, temporary, indent=2, ensure_ascii=False)
-            temporary.write("\n")
-        temporary_path.replace(path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
 
 
 def _source_result(source: str, result: dict[str, Any]) -> dict[str, Any]:
@@ -358,7 +322,7 @@ def _overall_status(endpoint_results: dict[str, dict[str, Any]]) -> str:
     return "unavailable"
 
 
-def _fastf1_event_schedule() -> pd.DataFrame:
+def _fastf1_event_schedule() -> pd.Series:
     schedule = fastf1.get_event_schedule(TARGET_SEASON, include_testing=False)
     if schedule.empty:
         raise SessionVerificationError("FastF1 returned no event schedule.")
@@ -367,7 +331,7 @@ def _fastf1_event_schedule() -> pd.DataFrame:
     candidates = schedule[
         location.str.contains(TARGET_LOCATION.casefold(), na=False)
         | event_name.str.contains("hungarian", na=False)
-    ]
+        ]
     if len(candidates) != 1:
         raise SessionVerificationError(
             f"Expected one FastF1 Hungaroring event, found {len(candidates)}."
@@ -394,12 +358,12 @@ def verify_fastf1() -> dict[str, Any]:
             raise SessionVerificationError("FastF1 returned no lap data for the race.")
 
         lap_path = RAW_DATA_DIR / "fastf1_hungary_2026_race_laps.parquet"
-        _atomic_parquet(laps, lap_path)
+        atomic_parquet(laps, lap_path)
         weather = session.weather_data
         weather_path = RAW_DATA_DIR / "fastf1_hungary_2026_race_weather.parquet"
         weather_status = "available" if weather is not None and not weather.empty else "partial"
         if weather is not None and not weather.empty:
-            _atomic_parquet(weather, weather_path)
+            atomic_parquet(weather, weather_path)
         result.update(
             {
                 "status": weather_status,
@@ -418,11 +382,11 @@ def verify_fastf1() -> dict[str, Any]:
 
 
 def _endpoint_result(
-    status: str,
-    *,
-    row_count: int = 0,
-    path: str | None = None,
-    details: str | None = None,
+        status: str,
+        *,
+        row_count: int = 0,
+        path: str | None = None,
+        details: str | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {"status": status, "row_count": row_count}
     if path is not None:
@@ -445,12 +409,12 @@ def _calendar_records(path: Path) -> list[dict[str, Any]] | None:
 
 
 def _load_calendar(
-    client: JsonClient,
-    endpoint: str,
-    path: Path,
-    params: dict[str, Any],
-    *,
-    refresh: bool,
+        client: JsonClient,
+        endpoint: str,
+        path: Path,
+        params: dict[str, Any],
+        *,
+        refresh: bool,
 ) -> tuple[list[dict[str, Any]], str]:
     if not refresh:
         try:
@@ -464,16 +428,16 @@ def _load_calendar(
     payload = client.get_json(endpoint, params)
     frame = pd.DataFrame(payload)
     _validate_calendar_frame(endpoint, frame)
-    _atomic_parquet(frame, path)
+    atomic_parquet(frame, path)
     return payload, "available"
 
 
 def _load_endpoint(
-    client: JsonClient,
-    endpoint: str,
-    session_key: int,
-    *,
-    refresh: bool,
+        client: JsonClient,
+        endpoint: str,
+        session_key: int,
+        *,
+        refresh: bool,
 ) -> tuple[pd.DataFrame | None, dict[str, Any]]:
     path = cache_path(session_key, endpoint)
     if not refresh:
@@ -491,20 +455,20 @@ def _load_endpoint(
         payload = client.get_json(endpoint, {"session_key": session_key})
         frame = make_parquet_safe(endpoint, pd.DataFrame(payload))
         _validate_endpoint_frame(endpoint, frame, session_key)
-        _atomic_parquet(frame, path)
+        atomic_parquet(frame, path)
         return frame, _endpoint_result(
             "available", row_count=len(frame), path=_relative_path(path)
         )
-    except (CircleOfDoomError, OSError, ValueError, TypeError) as exc:
+    except (OpenF1Error, OSError, ValueError, TypeError) as exc:
         return None, _endpoint_result("unavailable", details=str(exc))
 
 
 def _load_locations(
-    client: JsonClient,
-    session_key: int,
-    drivers: pd.DataFrame | None,
-    *,
-    refresh: bool,
+        client: JsonClient,
+        session_key: int,
+        drivers: pd.DataFrame | None,
+        *,
+        refresh: bool,
 ) -> tuple[pd.DataFrame | None, dict[str, Any]]:
     combined_path = cache_path(session_key, "location")
     if not refresh:
@@ -541,9 +505,9 @@ def _load_locations(
             if frame.empty:
                 failures.append(str(driver_number))
                 continue
-            _atomic_parquet(frame, location_driver_cache_path(session_key, driver_number))
+            atomic_parquet(frame, location_driver_cache_path(session_key, driver_number))
             frames.append(frame)
-        except (CircleOfDoomError, OSError, ValueError, TypeError) as exc:
+        except (OpenF1Error, OSError, ValueError, TypeError) as exc:
             failures.append(f"{driver_number}: {exc}")
 
     if not frames:
@@ -554,7 +518,7 @@ def _load_locations(
 
     combined = pd.concat(frames, ignore_index=True)
     _validate_endpoint_frame("location", combined, session_key)
-    _atomic_parquet(combined, cache_path(session_key, "location"))
+    atomic_parquet(combined, cache_path(session_key, "location"))
     status = "partial" if failures else "available"
     details = "; ".join(failures) if failures else None
     return combined, _endpoint_result(
@@ -563,9 +527,9 @@ def _load_locations(
 
 
 def verify_openf1(
-    client: JsonClient | None = None,
-    *,
-    refresh: bool = False,
+        client: JsonClient | None = None,
+        *,
+        refresh: bool = False,
 ) -> dict[str, Any]:
     checked_at = datetime.now(timezone.utc).isoformat()
     result: dict[str, Any] = {
@@ -609,7 +573,7 @@ def verify_openf1(
         result["status"] = _overall_status(result["endpoints"])
         if result["calendar_status"] == "stale" and result["status"] == "available":
             result["status"] = "stale"
-    except (CircleOfDoomError, SessionVerificationError, OSError, ValueError, TypeError) as exc:
+    except (OpenF1Error, SessionVerificationError, OSError, ValueError, TypeError) as exc:
         result["details"] = str(exc)
     return result
 
@@ -637,7 +601,7 @@ def build_report(openf1_result: dict[str, Any]) -> dict[str, Any]:
 def run(output: Path | None = None, *, strict: bool = False, refresh: bool = False) -> int:
     report = build_report(verify_openf1(refresh=refresh))
     report_path = output or ARTIFACTS_DIR / "source_verification" / "hungary_2026.json"
-    _atomic_json(report, report_path)
+    atomic_json(report, report_path)
     openf1_status = report["sources"]["openf1"]["status"]
     print(f"Verification report: {report_path}")
     print(f"OpenF1 status: {openf1_status}")
@@ -665,4 +629,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

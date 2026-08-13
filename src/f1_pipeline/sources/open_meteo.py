@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -89,18 +89,59 @@ def utc_timestamp(value: str | datetime | pd.Timestamp, name: str) -> pd.Timesta
     return parsed
 
 
+def select_historical_single_run(
+        decision_time: str | datetime | pd.Timestamp,
+        *,
+        publication_lag: timedelta = timedelta(hours=6),
+        cycle_hours: tuple[int, ...] = (0, 6, 12, 18),
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    cut_time = utc_timestamp(decision_time, "decision_time")
+    if publication_lag < timedelta(0):
+        raise OpenMeteoError("publication_lag must not be negative.")
+    cycles = tuple(sorted(set(cycle_hours)))
+    if not cycles or any(isinstance(hour, bool) or not 0 <= hour <= 23 for hour in cycles):
+        raise OpenMeteoError("cycle_hours must contain UTC hours from 0 to 23.")
+    latest_initialization = cut_time - publication_lag
+    eligible = [hour for hour in cycles if hour <= latest_initialization.hour]
+    run_day = latest_initialization.normalize()
+    if eligible:
+        run_hour = eligible[-1]
+    else:
+        run_day -= pd.Timedelta(days=1)
+        run_hour = cycles[-1]
+    run_time = run_day + pd.Timedelta(int(run_hour), unit="h")
+    available_at = run_time + pd.Timedelta(publication_lag)
+    if available_at > cut_time:
+        raise OpenMeteoError("No historical model run is available at decision_time.")
+    return run_time, available_at
+
+
+def validate_forecast_horizon(
+        forecast: pd.DataFrame,
+        target_time: str | datetime | pd.Timestamp,
+) -> None:
+    if forecast.empty or "valid_time" not in forecast.columns:
+        raise OpenMeteoError("The forecast has no validity horizon.")
+    valid_times = pd.to_datetime(forecast["valid_time"], utc=True, errors="coerce")
+    if valid_times.isna().all():
+        raise OpenMeteoError("The forecast has no valid timestamps.")
+    target = utc_timestamp(target_time, "target_time")
+    if target < valid_times.min() or target > valid_times.max():
+        raise OpenMeteoError("The forecast horizon does not cover the target session.")
+
+
 def normalize_forecast(
-    payload: dict[str, Any],
-    *,
-    snapshot_id: str,
-    session_id: str,
-    circuit_id: str,
-    reference: CircuitReference,
-    run_initialized_at: pd.Timestamp,
-    available_at: pd.Timestamp,
-    retrieved_at: pd.Timestamp,
-    decision_time: pd.Timestamp,
-    raw_path: Path,
+        payload: dict[str, Any],
+        *,
+        snapshot_id: str,
+        session_id: str,
+        circuit_id: str,
+        reference: CircuitReference,
+        run_initialized_at: pd.Timestamp,
+        available_at: pd.Timestamp,
+        retrieved_at: pd.Timestamp,
+        decision_time: pd.Timestamp,
+        raw_path: Path,
 ) -> pd.DataFrame:
     if available_at > decision_time:
         raise OpenMeteoError("The forecast was not available at decision_time.")
@@ -149,8 +190,8 @@ def normalize_forecast(
     frame["retrieved_at"] = retrieved_at
     frame["decision_time"] = decision_time
     frame["lead_time_minutes"] = (
-        frame["valid_time"] - run_initialized_at
-    ).dt.total_seconds() / 60
+                                         frame["valid_time"] - run_initialized_at
+                                 ).dt.total_seconds() / 60
     frame["availability_basis"] = "conservative_documented_latency"
     frame["units_json"] = json.dumps(
         {variable: units[variable] for variable in HOURLY_VARIABLES},
@@ -197,16 +238,16 @@ def normalize_forecast(
 
 
 def load_forecast(
-    reference: CircuitReference,
-    *,
-    session_id: str,
-    circuit_id: str,
-    run_initialized_at: str | datetime | pd.Timestamp,
-    available_at: str | datetime | pd.Timestamp,
-    decision_time: str | datetime | pd.Timestamp,
-    refresh: bool = False,
-    client: OpenMeteoClient | None = None,
-    retrieved_at: datetime | None = None,
+        reference: CircuitReference,
+        *,
+        session_id: str,
+        circuit_id: str,
+        run_initialized_at: str | datetime | pd.Timestamp,
+        available_at: str | datetime | pd.Timestamp,
+        decision_time: str | datetime | pd.Timestamp,
+        refresh: bool = False,
+        client: OpenMeteoClient | None = None,
+        retrieved_at: datetime | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     run_time = utc_timestamp(run_initialized_at, "run_initialized_at")
     availability_time = utc_timestamp(available_at, "available_at")
@@ -226,7 +267,7 @@ def load_forecast(
         snapshot_dir.glob(f"{reference.wikidata_entity_id}_{MODEL}_{run_key}_*.json")
     )
     fetched = refresh or not existing
-    payload: dict[str, Any]
+    payload: dict[str, Any] = {}
     raw_path: Path
     if fetched:
         payload = (client or OpenMeteoClient()).get_forecast(params)
@@ -264,7 +305,3 @@ def load_forecast(
         "raw_sha256": sha256(raw_path),
         "row_count": len(frame),
     }
-
-
-
-

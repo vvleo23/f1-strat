@@ -35,6 +35,61 @@ Die Pipeline speichert quellnahe Daten als Parquet, validiert Pflichtfelder, Sch
 
 Die aktuelle Implementierung besitzt einen manuellen idempotenten Weekend-Orchestrator für Eventauswahl, Session-Discovery, Session-Ingestion, Silver-Transformation, Wikidata und Open-Meteo. Persistierte zeitversetzte Wiederholungen und automatische Finalisierung bleiben geplant. Automatisiert bedeutet dabei nicht live: OpenF1 wird nach Ende einer Session historisch abgefragt, solange kein kostenpflichtiger Live-Zugang verwendet wird.
 
+```mermaid
+sequenceDiagram
+	participant Aufruf as Manueller Aufruf
+	participant Orchestrator as Weekend-Orchestrator
+	participant Planner as Session-Planer
+	participant OpenF1
+	participant Registry as Circuit-Registry
+	participant Wikidata
+	participant OpenMeteo as Open-Meteo
+	participant Validierung
+	participant Ablage as Parquet und Manifeste
+
+	Aufruf->>Orchestrator: Meeting, Zweck, Ziel-Session und decision_time
+	Orchestrator->>OpenF1: Meeting- und Session-Metadaten laden
+	OpenF1-->>Orchestrator: Entdeckte Sessions
+	Orchestrator->>Planner: Zweck und zeitliche Grenze anwenden
+	Planner-->>Orchestrator: Geprüfte Session- und Endpoint-Auswahl
+
+	loop Für jede ausgewählte Session
+		Orchestrator->>OpenF1: Anwendbare Endpoints abrufen
+		alt Antwort verfügbar und gültig
+			OpenF1-->>Orchestrator: Quelldaten
+			Orchestrator->>Ablage: Unveränderlichen Bronze-Snapshot schreiben
+			Orchestrator->>Validierung: Normalisierte Silver-Facts prüfen
+			Validierung-->>Orchestrator: Prüfstatus
+			Orchestrator->>Ablage: Silver-Facts und Session-Manifest schreiben
+		else Endpoint leer, verspätet oder fehlerhaft
+			Orchestrator->>Ablage: Status und Fehlerkontext festhalten
+			Note over Orchestrator,Ablage: Frühere gültige Snapshots bleiben erhalten
+		end
+	end
+
+	Orchestrator->>Registry: OpenF1-Circuit-Key auflösen
+	alt Mapping geprüft
+		Registry-->>Orchestrator: Wikidata-ID und Registry-Nachweis
+	else Circuit unbekannt
+		Orchestrator->>Wikidata: Begrenzte Kandidatensuche
+		Wikidata-->>Orchestrator: Ungeprüfte Kandidaten
+		Orchestrator->>Ablage: Kandidaten mit Status partial speichern
+	end
+
+	alt Geprüfte WGS84-Koordinaten vorhanden
+		Orchestrator->>OpenMeteo: Modelllauf für decision_time abrufen
+		OpenMeteo-->>Orchestrator: Forecast und Request-Metadaten
+		Orchestrator->>Validierung: Forecast-Facts prüfen
+		Validierung-->>Orchestrator: Prüfstatus
+		Orchestrator->>Ablage: Forecast-Snapshot und Facts schreiben
+	else Kein geprüftes Mapping
+		Note over Orchestrator,OpenMeteo: Wetterpfad bleibt fail-closed
+	end
+
+	Orchestrator->>Ablage: Inhaltsidentifiziertes Gesamtmanifest schreiben
+	Orchestrator-->>Aufruf: Aggregierter Run-Status
+```
+
 ### 2.4 Zeitlich begrenzten Replay aufbauen
 
 ```text
@@ -57,6 +112,16 @@ Eine Neuberechnung kann durch Rennstart, Rundenabschluss, Race-Control-Status, B
 
 Der bestehende Replay verarbeitet Positionen, Abstände, Runden, Reifen, Boxenstopps und Race-Control-Meldungen bereits mit rückwärts gerichteten As-of-Zuordnungen. Diese Logik soll in einen gemeinsamen `decision_time`-Datenzugriff überführt werden, den Replay und spätere Berechnungen gleichermaßen verwenden. Eine erste Pace-Analyse gruppiert OpenF1-Runden nach Stints und vergleicht die Fahreraggregate separat mit FastF1. Die Quelldaten werden nicht zusammengezählt.
 
+### 2.6 Zielbild und aktueller Umsetzungsstand
+
+Das fachliche Zielbild besteht aus zwei Ansichten. Die Übersichtsseite wählt Saison, Rennwochenende und Session und zeigt Kalender, Ergebnisse, Fahrer- und Teamwertungen, Siege, Podien sowie wenige einfache Analysen. Von dort werden die Re-live-Ansicht, eine Qualifying-Berechnung oder eine Strategiebetrachtung ausgewählt. Die Re-live-Seite kombiniert Fahrerreihenfolge, Positionen, Wetter-Forecast, Race-Control-Ereignisse und Strategieempfehlung. Für die Bewegung kann zwischen dem synthetischen Circle of Doom und einer aus Fahrzeugkoordinaten abgeleiteten lokalen Streckenlinie gewechselt werden. Fehlt eine geprüfte lokale Geometrie, bleibt der Circle die sichere Rückfallansicht.
+
+Der Abgleich mit dem realisierten Stand zeigt eine bewusst ungleichmäßige Entwicklung. Meeting- und Sessionauswahl, zweckabhängige Ladepläne, OpenF1-Weekend-Ingestion, Wetter-Forecast, normalisierte Dimensionen und Facts sowie der Replay-Prototyp bilden bereits eine belastbare Grundlage. Ergebnisse und Standings, beide Dashboard-Seiten, der zentrale leakage-freie Datenzugriff, Calculation Snapshots, die Qualifying-Berechnung und die Strategie- beziehungsweise Boxenstoppfenster-Empfehlung fehlen noch. Der verbindliche Detailstatus und die Zuordnung von Quellen über Bronze-Daten zu Features stehen in der [`README.md`](../README.md), damit der technische Stand nicht an zwei Stellen auseinanderläuft.
+
+Bedarfsorientiertes Laden ist bisher auf Session- und Sessiontyp-Ebene umgesetzt. Der Zweck bestimmt, welche bereits abgeschlossenen Sessions grundsätzlich zulässig sind; Endpoint-Profile verhindern offensichtlich unpassende Abrufe. Eine spätere Qualifying-Berechnung darf nur vorher verfügbare Trainings-, Sprint-, Reifen- und Wetterinformationen verwenden. Ein vollständiger Weekend-Aufruf lädt derzeit die anwendbaren OpenF1-Facts sowie den geprüften Circuit- und Wetterpfad, aber noch keine vollständige Telemetrie, Ergebnisse, Standings, FastF1-Weekend-Daten oder mehrere Forecast-Stände. Ein Dashboard-Button darf deshalb nur einen Auftrag an einen getrennten Orchestrator beziehungsweise Admin-Runner übergeben und dessen Status anzeigen. Die read-only Dashboard-Anwendung führt keine Providerabfragen und keine schreibende Pipeline selbst aus.
+
+Die Qualifying-Berechnung verarbeitet immer das gesamte Teilnehmerfeld. Nur so bleiben vollständige Rangfolge und Top-15-, Top-10- und Top-3-Wahrscheinlichkeiten zwischen den Fahrern konsistent. Ein Team oder Fahrer wird anschließend lediglich hervorgehoben oder mit dem Teamkollegen verglichen; ein Wechsel erfordert weder neue Quelldaten noch einen neuen feldweiten Modelllauf. Eine Strategieempfehlung ist dagegen fahrerspezifisch und benötigt einen Fokusfahrer. Ihr gemeinsamer Race State enthält trotzdem das gesamte Feld, weil Verkehr, Abstände, Boxenausfahrt sowie Under- und Overcut von den Konkurrenten abhängen. Nach Aufbau eines gecachten Race State soll ein Fahrerwechsel daher nur die kleine Strategieauswertung neu auslösen, nicht Ingestion und Replay.
+
 ## 3. Quellen und Verifikation
 
 Die vollständigen technischen Kurzbeschreibungen stehen in den englischen Quellenkarten, zum Beispiel für [OpenF1](sources/openf1.md) und [FastF1](sources/fastf1.md).
@@ -69,7 +134,7 @@ Für alle fünf Hungary-Sessions wurden 110 Session-Einträge, 3.232 Runden, 3.4
 
 ### FastF1
 
-FastF1 wird sessionzentriert geladen und lokal gecacht. Geprüft werden mindestens Fahrer, Rundennummer und Rundenzeit sowie – sofern vorhanden – Wetter und Telemetrie. Für Hungary 2026 wurden 1.431 Runden und 157 Wetterzeilen gespeichert.
+FastF1 wird sessionzentriert geladen und lokal gecacht. Geprüft werden mindestens Fahrer, Rundennummer und Rundenzeit sowie – sofern vorhanden – Wetter. Die aktuelle Verifikation lädt Telemetrie ausdrücklich nicht. Für Hungary 2026 wurden 1.431 Runden und 157 Wetterzeilen gespeichert.
 
 ### Weekend-Weather-Pipeline
 
@@ -102,6 +167,31 @@ OpenF1 und FastF1 überschneiden sich bei Runden, Wetter und Sessiondaten, liefe
 ### Zukunftswissen im historischen Replay
 
 Ein historisches Rennen enthält im Nachhinein alle späteren Ereignisse. Werden diese unbemerkt in frühere Zustände übernommen, entsteht Data Leakage. Für jeden Lauf gilt deshalb eine explizite `decision_time`. Rennbeobachtungen werden erst ab ihrem Ereigniszeitpunkt freigegeben. Forecasts benötigen zusätzlich eine nachgewiesene `available_at`; ein altes `valid_time` oder eine frühe Modellinitialisierung beweist nicht, dass der Forecast bereits abrufbar war.
+
+```mermaid
+flowchart LR
+	subgraph Forecast[Forecast-Zeitachse]
+		direction LR
+		FI[Modelllauf startet<br/>run_initialized_at] --> FA[Forecast ist nachweislich verfügbar<br/>available_at]
+		FA --> FD[Berechnungsgrenze<br/>decision_time]
+		FD --> FV[Vorhersageziel<br/>valid_time]
+	end
+
+	subgraph Beobachtung[Rennbeobachtungs-Zeitachse]
+		direction LR
+		OE[Ereignis tritt ein<br/>event_time] --> OA[Fact ist verfügbar<br/>available_at]
+		OA --> OD[Berechnungsgrenze<br/>decision_time]
+		OD --> OX[Späteres Ereignis<br/>event_time > decision_time]
+	end
+
+	FA --> Erlaubt[Im Input-Snapshot erlaubt]
+	FV -. Zielzeit darf nach der Entscheidung liegen .-> Erlaubt
+	OA --> Erlaubt
+	OX --> Gesperrt[Für diesen Lauf gesperrt]
+	Gesperrt -. spätere Neuberechnung .-> NeueVersion[Neue Berechnungsversion]
+```
+
+Für Forecasts entscheidet ihre damalige Verfügbarkeit, nicht die Lage ihres Vorhersageziels: Ein vor `decision_time` bekannter Forecast darf deshalb Werte für ein späteres `valid_time` enthalten. Bei zukünftigen Captures dokumentiert `retrieved_at` den tatsächlichen Abruf durch das Projekt. Für den historischen Akzeptanzfall wird stattdessen die ausdrücklich dokumentierte konservative `available_at`-Regel verwendet. Rennbeobachtungen nach `decision_time` bleiben unsichtbar und dürfen erst in eine spätere Berechnungsversion eingehen.
 
 Verspätet eingetroffene Daten dürfen ein früher gespeichertes Ergebnis nicht stillschweigend verändern. Sie erzeugen bei einer erneuten Verarbeitung eine neue Version mit eigenem Input-Nachweis.
 
@@ -138,6 +228,9 @@ Der OpenF1-Endpoint `intervals` antwortete für die geprüften Practice- und Qua
 | August 2026 | Modellinitialisierung und Verfügbarkeit trennen | Ein Wettermodelllauf ist erst nach seiner Berechnung öffentlich nutzbar |
 | August 2026 | Berechnung vor ML festlegen | Transparente Baselines und Simulationen erfüllen denselben versionierten Vertrag |
 | August 2026 | Dashboard als read-only Consumer zurückstellen | Ingestion, Orchestrierung und Modelltraining bleiben außerhalb der UI |
+| August 2026 | Pipeline-Aufträge von der Dashboard-Anwendung trennen | Lade-Buttons übergeben nur einen Auftrag an einen getrennten Job-Service oder Admin-Runner; die Anzeige bleibt read-only |
+| August 2026 | Qualifying feldweit berechnen und erst danach filtern | Rangfolge und Top-N-Wahrscheinlichkeiten benötigen dasselbe vollständige Teilnehmerfeld; Team- oder Fahrerwechsel bleiben reine Darstellung |
+| August 2026 | Strategie auf einen Fokusfahrer und gemeinsamen Race State beziehen | Die Empfehlung ist fahrerspezifisch, benötigt für Verkehr, Abstände und Boxenausfahrt aber weiterhin alle Konkurrenten |
 | August 2026 | Wikidata für Streckenreferenzpunkte verwenden | Für Wetter wird nur ein geprüfter globaler Streckenpunkt benötigt; die lokale OpenF1-Centerline bleibt für den Replay |
 | August 2026 | Replay-Leakage vor Predictions beheben | Referenzpace, Stints und Rundenfortschritt dürfen keine späteren Renninformationen vorwegnehmen |
 | August 2026 | Infrastruktur vor Berechnungen umsetzen | Weekend-Weather-Pipeline, vollständige Weekend-Ingestion und Silver-Facts kommen vor Replay-Härtung und Calculation Snapshots |

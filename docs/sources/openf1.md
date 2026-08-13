@@ -1,6 +1,6 @@
 # OpenF1
 
-**Status:** Implemented for all five Hungary 2026 weekend sessions; persisted scheduling and finalization remain planned.
+**Status:** Purpose-based session planning and all five Hungary 2026 sessions implemented; persisted scheduling and finalization remain planned.
 
 [OpenF1](https://openf1.org/) is the primary event-oriented source. Its HTTP API provides structured historical Formula 1 data with absolute timestamps and stable session keys.
 
@@ -15,9 +15,9 @@
 | `weather` | timestamped measurements | Session-weather observations |
 | `race_control` | flags, categories, messages | Replay and track status |
 | `location` | timestamped `x`, `y`, `z` | Vehicle movement and local centerline |
-| `session_result`, `championship_drivers`, `championship_teams` | results, points, rank | Results, standings, wins, and podium summaries |
+| `session_result`, `championship_drivers`, `championship_teams` | results, points, rank | Planned results, standings, wins, and podium summaries; not ingested yet |
 
-OpenF1 is the primary source for meeting/session discovery and the replay timeline. The target weekend pipeline discovers every advertised session, including sprint formats, before selecting endpoints for a job profile. FastF1 overlap is retained only as a separate cross-check.
+OpenF1 is the primary source for meeting/session discovery and the replay timeline. One shared transport and Bronze path convention serve master data, weekend ingestion, replay, and verification. The pipeline discovers every advertised session, including sprint formats, before selecting sessions by purpose and `decision_time` and then selecting endpoints by session type. FastF1 overlap is retained only as a separate cross-check.
 
 The `weekend_facts` profile loads drivers, laps, stints, weather, and the applicable position, pit, interval, and Race Control data. The OpenF1 `intervals` endpoint is not available for the verified Hungary practice and qualifying sessions and is therefore not requested for those session types. High-volume `location` remains an explicit replay or geometry input.
 

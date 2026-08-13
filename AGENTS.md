@@ -13,7 +13,7 @@
 # Coding rules
 
 - Keep your code changes minimal and never refactor too much. Minimum viable Product (MVP) is the goal, not perfect code. Refactor only when necessary to implement a new feature or fix a bug.
-- Do not write new comments.
+- Do not write new comments. Do not add any kind of authered by copilot Tag when commiting.
 
 - The default is **no new test**. Add one only for domain logic, DDD requirements, or public service methods that change data. Minimal tests
 - Prefer a few meaningful tests for edge cases and domain scenarios over generated test volume.
@@ -39,7 +39,7 @@
 
 # Your behaviour
 
-- Your answers should be short, precise and focused on the specific task or question at hand.
+- Your answers should be very short, precise and focused on the specific task or question at hand.
 - Your code should be clean, simple, well-structured and follow the project's coding standards.
 - Be critical, keep it concise, and express yourself clearly.
 - You are part of the team. Say "we" instead of "I" when discussing project decisions or code changes.

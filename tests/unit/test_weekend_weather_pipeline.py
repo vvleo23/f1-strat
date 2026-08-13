@@ -10,10 +10,13 @@ from typing import Any
 import pandas as pd
 
 from f1_pipeline.persistence import atomic_json, atomic_parquet
+from f1_pipeline.planning import plan_sessions_for_purpose
 from f1_pipeline.sources.open_meteo import (
     HOURLY_VARIABLES,
     OpenMeteoError,
     normalize_forecast,
+    select_historical_single_run,
+    validate_forecast_horizon,
 )
 from f1_pipeline.sources.weekend_weather_pipeline import (
     WeekendWeatherPipelineError,
@@ -245,6 +248,136 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                     raw_path=raw_path,
                 )
 
+    def test_purpose_planning_uses_only_sessions_available_at_decision_time(self) -> None:
+        sessions = [
+            {
+                "session_id": "openf1:session:10",
+                "source_session_key": 10,
+                "session_type": "Practice",
+                "session_name": "Practice 1",
+                "scheduled_start_utc": "2026-07-24T10:00:00Z",
+                "scheduled_end_utc": "2026-07-24T11:00:00Z",
+                "status": "completed",
+            },
+            {
+                "session_id": "openf1:session:11",
+                "source_session_key": 11,
+                "session_type": "Qualifying",
+                "session_name": "Qualifying",
+                "scheduled_start_utc": "2026-07-25T14:00:00Z",
+                "scheduled_end_utc": "2026-07-25T15:00:00Z",
+                "status": "completed",
+            },
+            {
+                "session_id": "openf1:session:12",
+                "source_session_key": 12,
+                "session_type": "Race",
+                "session_name": "Race",
+                "scheduled_start_utc": "2026-07-26T13:00:00Z",
+                "scheduled_end_utc": "2026-07-26T15:00:00Z",
+                "status": "completed",
+            },
+        ]
+
+        qualifying = plan_sessions_for_purpose(
+            sessions,
+            purpose="qualifying_prediction",
+            decision_time="2026-07-25T13:00:00Z",
+        )
+        strategy = plan_sessions_for_purpose(
+            sessions,
+            purpose="race_strategy",
+            decision_time="2026-07-26T13:30:00Z",
+        )
+        replay = plan_sessions_for_purpose(
+            sessions,
+            purpose="replay",
+            decision_time="2026-07-26T16:00:00Z",
+            target_session_key=12,
+        )
+        practice_replay = plan_sessions_for_purpose(
+            sessions,
+            purpose="replay",
+            decision_time="2026-07-24T12:00:00Z",
+            target_session_key=10,
+        )
+
+        self.assertEqual(
+            [row["source_session_key"] for row in qualifying["selected_sessions"]],
+            [10],
+        )
+        self.assertEqual(
+            [row["source_session_key"] for row in strategy["selected_sessions"]],
+            [10, 11, 12],
+        )
+        self.assertEqual(
+            [row["source_session_key"] for row in replay["selected_sessions"]],
+            [12],
+        )
+        self.assertEqual(
+            [row["source_session_key"] for row in practice_replay["selected_sessions"]],
+            [10],
+        )
+
+    def test_qualifying_plan_includes_completed_sprint_weekend_sessions(self) -> None:
+        sessions = [
+            {
+                "session_id": f"openf1:session:{key}",
+                "source_session_key": key,
+                "session_type": session_type,
+                "session_name": name,
+                "scheduled_start_utc": start,
+                "scheduled_end_utc": end,
+                "status": "completed",
+            }
+            for key, session_type, name, start, end in (
+                (1, "Practice", "Practice 1", "2026-05-01T10:00:00Z", "2026-05-01T11:00:00Z"),
+                (2, "Qualifying", "Sprint Qualifying", "2026-05-01T14:00:00Z", "2026-05-01T15:00:00Z"),
+                (3, "Race", "Sprint", "2026-05-02T10:00:00Z", "2026-05-02T11:00:00Z"),
+                (4, "Qualifying", "Qualifying", "2026-05-02T14:00:00Z", "2026-05-02T15:00:00Z"),
+                (5, "Race", "Race", "2026-05-03T13:00:00Z", "2026-05-03T15:00:00Z"),
+            )
+        ]
+
+        plan = plan_sessions_for_purpose(
+            sessions,
+            purpose="qualifying_prediction",
+            decision_time="2026-05-02T13:00:00Z",
+        )
+
+        self.assertEqual(plan["target_session"]["source_session_key"], 4)
+        self.assertEqual(
+            [row["source_session_key"] for row in plan["selected_sessions"]],
+            [1, 2, 3],
+        )
+
+    def test_historical_run_selection_respects_publication_boundary(self) -> None:
+        exact_run, exact_available = select_historical_single_run(
+            "2026-07-26T12:00:00Z"
+        )
+        earlier_run, earlier_available = select_historical_single_run(
+            "2026-07-26T11:59:59Z"
+        )
+
+        self.assertEqual(exact_run, pd.Timestamp("2026-07-26T06:00:00Z"))
+        self.assertEqual(exact_available, pd.Timestamp("2026-07-26T12:00:00Z"))
+        self.assertEqual(earlier_run, pd.Timestamp("2026-07-26T00:00:00Z"))
+        self.assertLessEqual(earlier_available, pd.Timestamp("2026-07-26T11:59:59Z"))
+
+    def test_forecast_horizon_must_cover_target_session(self) -> None:
+        forecast = pd.DataFrame(
+            {
+                "valid_time": pd.to_datetime(
+                    ["2026-07-26T12:00:00Z", "2026-07-26T13:00:00Z"],
+                    utc=True,
+                )
+            }
+        )
+
+        validate_forecast_horizon(forecast, "2026-07-26T13:00:00Z")
+        with self.assertRaises(OpenMeteoError):
+            validate_forecast_horizon(forecast, "2026-07-26T14:00:00Z")
+
     def test_weather_failure_preserves_f1_output_and_idempotent_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -268,6 +401,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                             "session_type": "Qualifying",
                             "session_name": "Qualifying",
                             "scheduled_start_utc": pd.Timestamp("2026-07-25T14:00:00Z"),
+                            "scheduled_end_utc": pd.Timestamp("2026-07-25T15:00:00Z"),
                             "status": "completed",
                         },
                         {
@@ -276,6 +410,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                             "session_type": "Race",
                             "session_name": "Race",
                             "scheduled_start_utc": pd.Timestamp("2026-07-26T13:00:00Z"),
+                            "scheduled_end_utc": pd.Timestamp("2026-07-26T15:00:00Z"),
                             "status": "completed",
                         },
                     ]
@@ -324,7 +459,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                 raise OpenMeteoError("forecast unavailable")
 
             def weekend_loader(
-                sessions: list[dict[str, Any]], **kwargs: object
+                    sessions: list[dict[str, Any]], **kwargs: object
             ) -> tuple[dict[str, object], Path]:
                 path = root / "curated" / "manifests" / "openf1_weekend_test.json"
                 result: dict[str, object] = {
@@ -338,6 +473,8 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                 return result, path
 
             first, first_path = run_weekend_weather_pipeline(
+                meeting_key=1291,
+                decision_time="2026-07-26T16:00:00Z",
                 output_dir=root / "curated",
                 master_loader=master_loader,
                 reference_loader=reference_loader,
@@ -347,6 +484,8 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                 session_types=["race", "qualifying"],
             )
             second, second_path = run_weekend_weather_pipeline(
+                meeting_key=1291,
+                decision_time="2026-07-26T16:00:00Z",
                 output_dir=root / "curated",
                 master_loader=master_loader,
                 reference_loader=reference_loader,
@@ -356,6 +495,8 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                 session_types=["qualifying", "race"],
             )
             race_only, race_only_path = run_weekend_weather_pipeline(
+                meeting_key=1291,
+                decision_time="2026-07-26T16:00:00Z",
                 output_dir=root / "curated",
                 master_loader=master_loader,
                 reference_loader=reference_loader,
@@ -365,7 +506,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             )
 
             self.assertEqual(first["status"], "partial")
-            self.assertEqual(first["schema_version"], 3)
+            self.assertEqual(first["schema_version"], 5)
             self.assertEqual(first["jobs"]["openf1"]["status"], "stale")
             self.assertEqual(first["jobs"]["openf1_weekend_facts"]["status"], "stale")
             self.assertEqual(first["jobs"]["open_meteo"]["status"], "unavailable")
@@ -381,5 +522,3 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-

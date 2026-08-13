@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from datetime import timedelta
@@ -11,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from f1_pipeline.geometry import (
+    TrackGeometryError,
     build_centerline,
     build_geometry_record,
     load_track_geometry,
@@ -145,6 +147,26 @@ class GeometryTest(unittest.TestCase):
         self.assertEqual(geometry.source_session_key, 11342)
         self.assertGreaterEqual(len(geometry.points), 3)
         self.assertEqual(geometry.points[0], geometry.points[-1])
+
+    def test_rejects_geometry_with_invalid_source_keys(self) -> None:
+        record = build_geometry_record(
+            self.locations,
+            self.laps,
+            session_key=11342,
+            meeting_key=1291,
+            circuit_id="openf1:circuit:4",
+            sample_laps=3,
+            point_count=41,
+        )
+        data = json.loads(record["geometry_data"])
+        data.pop("source_session_key")
+        record["geometry_data"] = json.dumps(data)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "circuit_geometry.parquet"
+            write_geometry_record(record, path)
+            with self.assertRaisesRegex(TrackGeometryError, "invalid source keys"):
+                load_track_geometry(11342, path=path)
 
 
 if __name__ == "__main__":

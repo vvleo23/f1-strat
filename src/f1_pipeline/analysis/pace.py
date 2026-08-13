@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from f1_pipeline.data_validation import validate_frame
+from f1_pipeline.persistence import atomic_json, atomic_parquet
 from f1_pipeline.settings import ARTIFACTS_DIR, PROJECT_ROOT, RAW_DATA_DIR
 
 SESSION_KEY = 11342
@@ -86,10 +85,10 @@ def _validate_fastf1_laps(laps: pd.DataFrame) -> None:
 
 
 def load_inputs(
-    *,
-    openf1_laps_path: Path = OPENF1_LAPS_PATH,
-    openf1_stints_path: Path = OPENF1_STINTS_PATH,
-    fastf1_laps_path: Path = FASTF1_LAPS_PATH,
+        *,
+        openf1_laps_path: Path = OPENF1_LAPS_PATH,
+        openf1_stints_path: Path = OPENF1_STINTS_PATH,
+        fastf1_laps_path: Path = FASTF1_LAPS_PATH,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     try:
         laps = pd.read_parquet(openf1_laps_path)
@@ -104,7 +103,7 @@ def load_inputs(
 
 
 def build_openf1_pace_by_stint(
-    laps: pd.DataFrame, stints: pd.DataFrame
+        laps: pd.DataFrame, stints: pd.DataFrame
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     _validate_openf1_laps(laps)
     _validate_openf1_stints(stints)
@@ -117,7 +116,7 @@ def build_openf1_pace_by_stint(
         lap_data["lap_duration_seconds"].notna()
         & lap_data["lap_duration_seconds"].map(math.isfinite)
         & lap_data["lap_duration_seconds"].gt(0)
-    ].copy()
+        ].copy()
     valid_laps["lap_number"] = pd.to_numeric(valid_laps["lap_number"], errors="coerce")
     stint_data = stints.copy()
     for column in ("lap_start", "lap_end"):
@@ -133,7 +132,7 @@ def build_openf1_pace_by_stint(
         merged["stint_number"].notna()
         & merged["lap_number"].ge(merged["lap_start"])
         & merged["lap_number"].le(merged["lap_end"])
-    ].copy()
+        ].copy()
     assigned = assigned.sort_values(
         ["session_key", "driver_number", "lap_number", "stint_number"]
     ).drop_duplicates(
@@ -203,7 +202,7 @@ def _fastf1_driver_summary(laps: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_source_pace_comparison(
-    openf1_laps: pd.DataFrame, fastf1_laps: pd.DataFrame
+        openf1_laps: pd.DataFrame, fastf1_laps: pd.DataFrame
 ) -> pd.DataFrame:
     _validate_openf1_laps(openf1_laps)
     _validate_fastf1_laps(fastf1_laps)
@@ -213,8 +212,8 @@ def build_source_pace_comparison(
         how="outer",
     )
     comparison["median_delta_seconds"] = (
-        comparison["fastf1_median_lap_seconds"]
-        - comparison["openf1_median_lap_seconds"]
+            comparison["fastf1_median_lap_seconds"]
+            - comparison["openf1_median_lap_seconds"]
     )
     comparison["absolute_median_delta_seconds"] = comparison[
         "median_delta_seconds"
@@ -237,49 +236,13 @@ def _relative_path(path: Path) -> str:
         return str(path)
 
 
-def _atomic_parquet(frame: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=path.parent, prefix=f".{path.name}.", suffix=".parquet", delete=False
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-        frame.to_parquet(temporary_path, index=False)
-        temporary_path.replace(path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-
-
-def _atomic_json(payload: dict[str, Any], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".json",
-            delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            json.dump(payload, temporary, indent=2, ensure_ascii=False)
-            temporary.write("\n")
-        temporary_path.replace(path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-
-
 def write_analysis(
-    *,
-    session_key: int = SESSION_KEY,
-    openf1_laps_path: Path = OPENF1_LAPS_PATH,
-    openf1_stints_path: Path = OPENF1_STINTS_PATH,
-    fastf1_laps_path: Path = FASTF1_LAPS_PATH,
-    output_dir: Path = OUTPUT_DIR,
+        *,
+        session_key: int = SESSION_KEY,
+        openf1_laps_path: Path = OPENF1_LAPS_PATH,
+        openf1_stints_path: Path = OPENF1_STINTS_PATH,
+        fastf1_laps_path: Path = FASTF1_LAPS_PATH,
+        output_dir: Path = OUTPUT_DIR,
 ) -> dict[str, Path]:
     if session_key != SESSION_KEY:
         raise PaceAnalysisError(f"This first analysis supports session {SESSION_KEY} only.")
@@ -294,8 +257,8 @@ def write_analysis(
     pace_path = output_dir / f"hungary_{session_key}_openf1_pace_by_stint.parquet"
     comparison_path = output_dir / f"hungary_{session_key}_source_pace_comparison.parquet"
     metadata_path = output_dir / f"hungary_{session_key}_pace_analysis.json"
-    _atomic_parquet(pace, pace_path)
-    _atomic_parquet(comparison, comparison_path)
+    atomic_parquet(pace, pace_path)
+    atomic_parquet(comparison, comparison_path)
     metadata: dict[str, Any] = {
         "schema_version": 1,
         "analysis": "pace_by_stint_and_source_comparison",
@@ -321,7 +284,7 @@ def write_analysis(
         },
         "diagnostics": diagnostics,
     }
-    _atomic_json(metadata, metadata_path)
+    atomic_json(metadata, metadata_path)
     return {
         "pace_by_stint": pace_path,
         "source_comparison": comparison_path,
@@ -346,4 +309,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

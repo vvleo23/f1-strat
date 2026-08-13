@@ -9,10 +9,22 @@ from typing import Any, Callable, Sequence
 
 import pandas as pd
 
-from f1_pipeline.master_data import MasterDataError, load_master_data
+from f1_pipeline.master_data import MasterDataError, load_master_data, master_table_path
+from f1_pipeline.planning import (
+    PURPOSES,
+    SessionPlanningError,
+    plan_sessions_for_purpose,
+)
 from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
 from f1_pipeline.settings import CURATED_DATA_DIR, PROJECT_ROOT
-from f1_pipeline.sources.open_meteo import OpenMeteoError, load_forecast
+from f1_pipeline.sources.open_meteo import (
+    OpenMeteoError,
+    load_forecast,
+    select_historical_single_run,
+    utc_timestamp,
+    validate_forecast_horizon,
+)
+from f1_pipeline.sources.openf1 import OpenF1Client, OpenF1Error
 from f1_pipeline.sources.openf1_weekend import (
     OpenF1WeekendError,
     ingest_weekend,
@@ -27,12 +39,7 @@ from f1_pipeline.sources.wikidata import (
 )
 
 DEFAULT_SEASON = 2026
-DEFAULT_MEETING_KEY = 1291
-DEFAULT_SESSION_KEY = 11342
-DEFAULT_RUN_INITIALIZED_AT = "2026-07-26T00:00:00Z"
-DEFAULT_AVAILABLE_AT = "2026-07-26T06:00:00Z"
-DEFAULT_DECISION_TIME = "2026-07-26T12:00:00Z"
-MANIFEST_SCHEMA_VERSION = 3
+MANIFEST_SCHEMA_VERSION = 5
 
 
 class WeekendWeatherPipelineError(RuntimeError):
@@ -52,38 +59,39 @@ def _relative(path: Path) -> str:
         return str(path)
 
 
-def _load_master_outputs(season: int, refresh: bool) -> dict[str, Path]:
-    dimensions = CURATED_DATA_DIR / "dimensions"
+def _load_master_outputs(
+        season: int,
+        refresh: bool,
+        client: OpenF1Client | None = None,
+) -> dict[str, Path]:
     outputs = {
-        "meeting": dimensions / "meeting.parquet",
-        "session": dimensions / "session.parquet",
-        "circuit": dimensions / "circuit.parquet",
+        "meeting": master_table_path("meeting", season),
+        "session": master_table_path("session", season),
+        "circuit": master_table_path("circuit", season),
         "manifest": CURATED_DATA_DIR / "manifests" / f"master_data_{season}.json",
     }
-    if refresh or not all(path.exists() for path in outputs.values()):
-        return load_master_data(season, refresh=refresh)
-    return outputs
+    if not refresh and all(path.exists() for path in outputs.values()):
+        return outputs
+    legacy_dimensions = CURATED_DATA_DIR / "dimensions"
+    legacy = {
+        **outputs,
+        "meeting": legacy_dimensions / "meeting.parquet",
+        "session": legacy_dimensions / "session.parquet",
+        "circuit": legacy_dimensions / "circuit.parquet",
+    }
+    if season == 2026 and not refresh and all(path.exists() for path in legacy.values()):
+        return legacy
+    return load_master_data(season, refresh=refresh, client=client)
 
 
-def _selected_context(
-    outputs: dict[str, Path], meeting_key: int, session_key: int
-) -> dict[str, Any]:
+def _selected_meeting_context(outputs: dict[str, Path], meeting_key: int) -> dict[str, Any]:
     meeting_id = f"openf1:meeting:{meeting_key}"
-    session_id = f"openf1:session:{session_key}"
     meetings = pd.read_parquet(outputs["meeting"])
     sessions = pd.read_parquet(outputs["session"])
     circuits = pd.read_parquet(outputs["circuit"])
     meeting_rows = meetings[meetings["meeting_id"].eq(meeting_id)]
-    session_rows = sessions[
-        sessions["session_id"].eq(session_id)
-        & sessions["meeting_id"].eq(meeting_id)
-    ]
     if len(meeting_rows) != 1:
         raise WeekendWeatherPipelineError(f"Meeting {meeting_key} was not found uniquely.")
-    if len(session_rows) != 1:
-        raise WeekendWeatherPipelineError(
-            f"Session {session_key} does not belong uniquely to meeting {meeting_key}."
-        )
     meeting = meeting_rows.iloc[0]
     circuit_id = str(meeting["circuit_id"])
     circuit_rows = circuits[circuits["circuit_id"].eq(circuit_id)]
@@ -101,6 +109,7 @@ def _selected_context(
     session_records: list[dict[str, Any]] = []
     for row in weekend_sessions.itertuples(index=False):
         scheduled_start = getattr(row, "scheduled_start_utc")
+        scheduled_end = getattr(row, "scheduled_end_utc")
         session_records.append(
             {
                 "session_id": str(getattr(row, "session_id")),
@@ -112,12 +121,14 @@ def _selected_context(
                 "scheduled_start_utc": (
                     scheduled_start.isoformat() if pd.notna(scheduled_start) else None
                 ),
+                "scheduled_end_utc": (
+                    scheduled_end.isoformat() if pd.notna(scheduled_end) else None
+                ),
                 "status": str(getattr(row, "status")),
             }
         )
     return {
         "meeting_id": meeting_id,
-        "session_id": session_id,
         "circuit_id": circuit_id,
         "circuit_name": (
             str(circuit.get("circuit_name"))
@@ -163,10 +174,10 @@ def _normalized_session_types(session_types: Sequence[str] | None) -> list[str] 
 
 
 def select_weekend_sessions(
-    sessions: list[dict[str, Any]],
-    *,
-    session_keys: Sequence[int] | None = None,
-    session_types: Sequence[str] | None = None,
+        sessions: list[dict[str, Any]],
+        *,
+        session_keys: Sequence[int] | None = None,
+        session_types: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_keys = _normalized_session_keys(session_keys)
     normalized_types = _normalized_session_types(session_types)
@@ -217,7 +228,11 @@ def select_weekend_sessions(
     )
 
 
-def _enrich_circuit(path: Path, reference: CircuitReference) -> None:
+def _enrich_circuit(
+        path: Path,
+        reference: CircuitReference,
+        legacy_path: Path | None = None,
+) -> None:
     circuits = pd.read_parquet(path)
     mask = circuits["source_circuit_key"].eq(reference.source_circuit_key)
     if int(mask.sum()) != 1:
@@ -240,9 +255,10 @@ def _enrich_circuit(path: Path, reference: CircuitReference) -> None:
         if column not in enriched.columns:
             enriched[column] = None
         enriched.loc[mask, column] = value
-    if enriched.equals(circuits):
-        return
-    atomic_parquet(enriched, path)
+    if not enriched.equals(circuits):
+        atomic_parquet(enriched, path)
+    if legacy_path is not None and legacy_path != path:
+        atomic_parquet(enriched, legacy_path)
 
 
 def _overall_status(jobs: dict[str, dict[str, Any]]) -> str:
@@ -255,52 +271,127 @@ def _overall_status(jobs: dict[str, dict[str, Any]]) -> str:
 
 
 def run_weekend_weather_pipeline(
-    *,
-    season: int = DEFAULT_SEASON,
-    meeting_key: int = DEFAULT_MEETING_KEY,
-    session_key: int = DEFAULT_SESSION_KEY,
-    run_initialized_at: str = DEFAULT_RUN_INITIALIZED_AT,
-    available_at: str = DEFAULT_AVAILABLE_AT,
-    decision_time: str = DEFAULT_DECISION_TIME,
-    session_keys: Sequence[int] | None = None,
-    session_types: Sequence[str] | None = None,
-    refresh: bool = False,
-    output_dir: Path = CURATED_DATA_DIR,
-    master_loader: MasterLoader | None = None,
-    reference_loader: ReferenceLoader | None = None,
-    forecast_loader: ForecastLoader | None = None,
-    weekend_loader: WeekendLoader | None = None,
+        *,
+        meeting_key: int,
+        decision_time: str,
+        season: int = DEFAULT_SEASON,
+        purpose: str = "weekend",
+        target_session_key: int | None = None,
+        forecast_session_key: int | None = None,
+        session_key: int | None = None,
+        run_initialized_at: str | None = None,
+        available_at: str | None = None,
+        session_keys: Sequence[int] | None = None,
+        session_types: Sequence[str] | None = None,
+        refresh: bool = False,
+        output_dir: Path = CURATED_DATA_DIR,
+        master_loader: MasterLoader | None = None,
+        reference_loader: ReferenceLoader | None = None,
+        forecast_loader: ForecastLoader | None = None,
+        weekend_loader: WeekendLoader | None = None,
 ) -> tuple[dict[str, Any], Path]:
     started_at = datetime.now(timezone.utc)
+    cut_time = utc_timestamp(decision_time, "decision_time")
+    normalized_decision_time = cut_time.isoformat()
+    normalized_purpose = purpose.strip().casefold()
     jobs: dict[str, dict[str, Any]] = {}
     context: dict[str, Any] | None = None
     reference: CircuitReference | None = None
     outputs: dict[str, Path] = {}
-    load_master = master_loader or _load_master_outputs
+    shared_openf1 = (
+        OpenF1Client()
+        if master_loader is None or weekend_loader is None
+        else None
+    )
+    load_master = master_loader or (
+        lambda selected_season, force_refresh: _load_master_outputs(
+            selected_season,
+            force_refresh,
+            shared_openf1,
+        )
+    )
     load_reference = reference_loader or load_circuit_reference
     load_weather = forecast_loader or load_forecast
-    load_weekend = weekend_loader or ingest_weekend
+    load_weekend = weekend_loader or (
+        lambda sessions, **kwargs: ingest_weekend(
+            sessions,
+            client=shared_openf1,
+            **kwargs,
+        )
+    )
     normalized_session_keys = _normalized_session_keys(session_keys)
     normalized_session_types = _normalized_session_types(session_types)
     resolved_session_keys: list[int] = []
+    requested_targets = {
+        value
+        for value in (target_session_key, forecast_session_key, session_key)
+        if value is not None
+    }
+    if len(requested_targets) > 1:
+        raise WeekendWeatherPipelineError(
+            "target_session_key and legacy session aliases must not conflict."
+        )
+    requested_target_session_key = next(iter(requested_targets), None)
+    if (run_initialized_at is None) != (available_at is None):
+        raise WeekendWeatherPipelineError(
+            "run_initialized_at and available_at must be provided together."
+        )
+    if run_initialized_at is None:
+        selected_run, selected_availability = select_historical_single_run(cut_time)
+        resolved_run_initialized_at = selected_run.isoformat()
+        resolved_available_at = selected_availability.isoformat()
+    else:
+        resolved_run_initialized_at = utc_timestamp(
+            run_initialized_at, "run_initialized_at"
+        ).isoformat()
+        resolved_available_at = utc_timestamp(available_at, "available_at").isoformat()
 
     try:
         outputs = load_master(season, refresh)
-        selected_context = _selected_context(outputs, meeting_key, session_key)
-    except (MasterDataError, WeekendWeatherPipelineError, OSError, ValueError, KeyError) as exc:
+        selected_context = _selected_meeting_context(outputs, meeting_key)
+    except (
+            MasterDataError,
+            OpenF1Error,
+            WeekendWeatherPipelineError,
+            OSError,
+            ValueError,
+            KeyError,
+    ) as exc:
         jobs["openf1"] = {"status": "unavailable", "error": str(exc)}
     else:
-        selected_sessions = select_weekend_sessions(
-            selected_context["sessions"],
-            session_keys=normalized_session_keys,
-            session_types=normalized_session_types,
-        )
-        resolved_session_keys = [session["source_session_key"] for session in selected_sessions]
+        try:
+            purpose_plan = plan_sessions_for_purpose(
+                selected_context["sessions"],
+                purpose=normalized_purpose,
+                decision_time=cut_time,
+                target_session_key=requested_target_session_key,
+            )
+        except SessionPlanningError as exc:
+            raise WeekendWeatherPipelineError(str(exc)) from exc
+        if purpose_plan["selected_sessions"]:
+            selected_sessions = select_weekend_sessions(
+                purpose_plan["selected_sessions"],
+                session_keys=normalized_session_keys,
+                session_types=normalized_session_types,
+            )
+        elif normalized_session_keys is not None or normalized_session_types is not None:
+            raise WeekendWeatherPipelineError(
+                "Session filters did not match data available at decision_time."
+            )
+        else:
+            selected_sessions = []
+        resolved_session_keys = [
+            session["source_session_key"] for session in selected_sessions
+        ]
         context = {
             **selected_context,
             "discovered_session_count": selected_context["session_count"],
             "selected_session_count": len(selected_sessions),
             "sessions": selected_sessions,
+            "purpose": purpose_plan["purpose"],
+            "decision_time": purpose_plan["decision_time"],
+            "selection_basis": purpose_plan["selection_basis"],
+            "target_session": purpose_plan["target_session"],
         }
         jobs["openf1"] = {
             "status": "available" if refresh else "stale",
@@ -309,16 +400,21 @@ def run_weekend_weather_pipeline(
             "session_count": context["discovered_session_count"],
         }
 
-    if context is None:
+    if context is None or not context["sessions"]:
         jobs["openf1_weekend_facts"] = {
             "status": "unavailable",
-            "error": "OpenF1 session context is unavailable.",
+            "error": (
+                "OpenF1 session context is unavailable."
+                if context is None
+                else "No completed sessions are available at decision_time."
+            ),
         }
     else:
         try:
             weekend_result, weekend_path = load_weekend(
                 context["sessions"],
                 meeting_key=meeting_key,
+                purpose=context["purpose"],
                 refresh=refresh,
                 curated_dir=output_dir,
             )
@@ -345,7 +441,13 @@ def run_weekend_weather_pipeline(
                 context["source_circuit_key"], refresh=refresh
             )
             reference = loaded_reference
-            _enrich_circuit(outputs["circuit"], loaded_reference)
+            dimensions_dir = (CURATED_DATA_DIR / "dimensions").resolve()
+            legacy_circuit = None
+            if season == 2026 and outputs["circuit"].resolve().is_relative_to(
+                    dimensions_dir
+            ):
+                legacy_circuit = dimensions_dir / "circuit.parquet"
+            _enrich_circuit(outputs["circuit"], loaded_reference, legacy_circuit)
             jobs["wikidata"] = {
                 **result,
                 "reference": loaded_reference.to_dict(),
@@ -377,19 +479,23 @@ def run_weekend_weather_pipeline(
         try:
             forecast, result = load_weather(
                 reference,
-                session_id=context["session_id"],
+                session_id=context["target_session"]["session_id"],
                 circuit_id=context["circuit_id"],
-                run_initialized_at=run_initialized_at,
-                available_at=available_at,
+                run_initialized_at=resolved_run_initialized_at,
+                available_at=resolved_available_at,
                 decision_time=decision_time,
                 refresh=refresh,
             )
+            target_start = context["target_session"].get("scheduled_start_utc")
+            if target_start is None:
+                raise OpenMeteoError("The target session has no scheduled start time.")
+            validate_forecast_horizon(forecast, target_start)
             snapshot_id = str(forecast.iloc[0]["snapshot_id"]).replace(":", "_")
             forecast_path = (
-                output_dir
-                / "facts"
-                / "weather_forecast"
-                / f"{snapshot_id}.parquet"
+                    output_dir
+                    / "facts"
+                    / "weather_forecast"
+                    / f"{snapshot_id}.parquet"
             )
             if not forecast_path.exists():
                 atomic_parquet(forecast, forecast_path)
@@ -401,20 +507,31 @@ def run_weekend_weather_pipeline(
         except (OpenMeteoError, OSError, ValueError, KeyError) as exc:
             jobs["open_meteo"] = {"status": "unavailable", "error": str(exc)}
 
+    resolved_target_session_key = (
+        context.get("target_session", {}).get("source_session_key")
+        if context
+        else None
+    )
+    selection = {
+        "season": season,
+        "meeting_key": meeting_key,
+        "purpose": normalized_purpose,
+        "target_session_key": resolved_target_session_key,
+        "run_initialized_at": resolved_run_initialized_at,
+        "available_at": resolved_available_at,
+        "decision_time": normalized_decision_time,
+        "session_keys": normalized_session_keys,
+        "session_types": normalized_session_types,
+        "resolved_session_keys": resolved_session_keys,
+    }
     identity = json.dumps(
         {
             "schema_version": MANIFEST_SCHEMA_VERSION,
-            "season": season,
-            "meeting_key": meeting_key,
-            "session_key": session_key,
-            "run_initialized_at": run_initialized_at,
-            "available_at": available_at,
-            "decision_time": decision_time,
-            "session_keys": normalized_session_keys,
-            "session_types": normalized_session_types,
-            "resolved_session_keys": resolved_session_keys,
+            **selection,
             "circuit_mapping": {
-                "schema_version": jobs.get("wikidata", {}).get("mapping", {}).get("schema_version"),
+                "schema_version": jobs.get("wikidata", {})
+                .get("mapping", {})
+                .get("schema_version"),
                 "sha256": jobs.get("wikidata", {}).get("mapping", {}).get("sha256"),
             },
             "jobs": {
@@ -436,24 +553,14 @@ def run_weekend_weather_pipeline(
         "started_at": started_at.isoformat(),
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "status": _overall_status(jobs),
-        "selection": {
-            "season": season,
-            "meeting_key": meeting_key,
-            "session_key": session_key,
-            "run_initialized_at": run_initialized_at,
-            "available_at": available_at,
-            "decision_time": decision_time,
-            "session_keys": normalized_session_keys,
-            "session_types": normalized_session_types,
-            "resolved_session_keys": resolved_session_keys,
-        },
+        "selection": selection,
         "context": context,
         "jobs": jobs,
     }
     manifest_path = (
-        output_dir
-        / "manifests"
-        / f"weekend_weather_pipeline_{meeting_key}_{run_id}.json"
+            output_dir
+            / "manifests"
+            / f"weekend_weather_pipeline_{meeting_key}_{run_id}.json"
     )
     if manifest_path.exists() and not refresh:
         with manifest_path.open(encoding="utf-8") as stream:
@@ -467,11 +574,15 @@ def main(argv: list[str] | None = None) -> int:
         description="Run the F1-Wikidata-Open-Meteo weekend weather pipeline."
     )
     parser.add_argument("--season", type=int, default=DEFAULT_SEASON)
-    parser.add_argument("--meeting-key", type=int, default=DEFAULT_MEETING_KEY)
-    parser.add_argument("--session-key", type=int, default=DEFAULT_SESSION_KEY)
-    parser.add_argument("--run-initialized-at", default=DEFAULT_RUN_INITIALIZED_AT)
-    parser.add_argument("--available-at", default=DEFAULT_AVAILABLE_AT)
-    parser.add_argument("--decision-time", default=DEFAULT_DECISION_TIME)
+    parser.add_argument("--meeting-key", type=int, required=True)
+    parser.add_argument("--decision-time", required=True)
+    parser.add_argument("--purpose", choices=PURPOSES, default="weekend")
+    target_group = parser.add_mutually_exclusive_group()
+    target_group.add_argument("--target-session-key", type=int)
+    target_group.add_argument("--forecast-session-key", type=int, dest="target_session_key")
+    target_group.add_argument("--session-key", type=int, dest="target_session_key")
+    parser.add_argument("--run-initialized-at")
+    parser.add_argument("--available-at")
     parser.add_argument(
         "--include-session-key", type=int, action="append", dest="session_keys"
     )
@@ -484,7 +595,8 @@ def main(argv: list[str] | None = None) -> int:
     manifest, path = run_weekend_weather_pipeline(
         season=args.season,
         meeting_key=args.meeting_key,
-        session_key=args.session_key,
+        purpose=args.purpose,
+        target_session_key=args.target_session_key,
         run_initialized_at=args.run_initialized_at,
         available_at=args.available_at,
         decision_time=args.decision_time,
@@ -499,10 +611,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-
-
-
-

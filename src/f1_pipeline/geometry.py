@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from f1_pipeline.data_validation import DataValidationError, validate_frame
+from f1_pipeline.persistence import atomic_parquet
 from f1_pipeline.settings import CURATED_DATA_DIR, RAW_DATA_DIR
 
 GEOMETRY_COLUMNS = [
@@ -101,9 +101,9 @@ def normalize_display_points(points: np.ndarray) -> tuple[tuple[float, float], .
 
 
 def point_at_progress(
-    points: tuple[tuple[float, float], ...],
-    progress: float,
-    offset: float = 0.0,
+        points: tuple[tuple[float, float], ...],
+        progress: float,
+        offset: float = 0.0,
 ) -> tuple[float, float]:
     """Interpolate a point and optional outward normal offset on a closed line."""
     if len(points) < 3:
@@ -148,9 +148,9 @@ def synthetic_track_geometry(point_count: int = 361) -> TrackGeometry:
 
 
 def _path_for_lap(
-    driver_locations: pd.DataFrame,
-    lap_start: pd.Timestamp,
-    next_lap_start: pd.Timestamp,
+        driver_locations: pd.DataFrame,
+        lap_start: pd.Timestamp,
+        next_lap_start: pd.Timestamp,
 ) -> tuple[np.ndarray, int] | None:
     samples = driver_locations[
         driver_locations["location_at"].between(
@@ -283,7 +283,7 @@ def _candidate_paths(location: pd.DataFrame, laps: pd.DataFrame) -> list[dict[st
                 "closure_distance": closure_distance,
                 "closure_ratio": closure_distance / path_length,
                 "duration_seconds": (
-                    cast_timestamp(next_lap_start) - cast_timestamp(row.lap_started_at)
+                        cast_timestamp(next_lap_start) - cast_timestamp(row.lap_started_at)
                 ).total_seconds(),
             }
         )
@@ -298,12 +298,12 @@ def cast_timestamp(value: Any) -> pd.Timestamp:
 
 
 def build_centerline(
-    location: pd.DataFrame,
-    laps: pd.DataFrame,
-    *,
-    sample_laps: int = DEFAULT_SAMPLE_LAPS,
-    point_count: int = DEFAULT_POINT_COUNT,
-    orientation_lap: int = DEFAULT_ORIENTATION_LAP,
+        location: pd.DataFrame,
+        laps: pd.DataFrame,
+        *,
+        sample_laps: int = DEFAULT_SAMPLE_LAPS,
+        point_count: int = DEFAULT_POINT_COUNT,
+        orientation_lap: int = DEFAULT_ORIENTATION_LAP,
 ) -> tuple[np.ndarray, list[dict[str, Any]], dict[str, Any]]:
     if sample_laps < 3:
         raise ValueError("sample_laps must be at least three.")
@@ -324,15 +324,15 @@ def build_centerline(
     for candidate in candidate_pool:
         candidate["length_ratio"] = candidate["path_length"] / median_path_length
         candidate["quality_score"] = (
-            abs(1.0 - candidate["length_ratio"]) + candidate["closure_ratio"]
+                abs(1.0 - candidate["length_ratio"]) + candidate["closure_ratio"]
         )
     usable = [
         candidate
         for candidate in candidate_pool
         if MIN_CANDIDATE_LENGTH_RATIO
-        <= candidate["length_ratio"]
-        <= MAX_CANDIDATE_LENGTH_RATIO
-        and candidate["closure_ratio"] <= MAX_CANDIDATE_CLOSURE_RATIO
+           <= candidate["length_ratio"]
+           <= MAX_CANDIDATE_LENGTH_RATIO
+           and candidate["closure_ratio"] <= MAX_CANDIDATE_CLOSURE_RATIO
     ]
     if len(usable) < MIN_ORIENTATION_CANDIDATES and candidate_pool is preferred:
         selection_basis = "clean_laps"
@@ -343,15 +343,15 @@ def build_centerline(
         for candidate in candidate_pool:
             candidate["length_ratio"] = candidate["path_length"] / median_path_length
             candidate["quality_score"] = (
-                abs(1.0 - candidate["length_ratio"]) + candidate["closure_ratio"]
+                    abs(1.0 - candidate["length_ratio"]) + candidate["closure_ratio"]
             )
         usable = [
             candidate
             for candidate in candidate_pool
             if MIN_CANDIDATE_LENGTH_RATIO
-            <= candidate["length_ratio"]
-            <= MAX_CANDIDATE_LENGTH_RATIO
-            and candidate["closure_ratio"] <= MAX_CANDIDATE_CLOSURE_RATIO
+               <= candidate["length_ratio"]
+               <= MAX_CANDIDATE_LENGTH_RATIO
+               and candidate["closure_ratio"] <= MAX_CANDIDATE_CLOSURE_RATIO
         ]
     usable.sort(
         key=lambda item: (
@@ -415,16 +415,16 @@ def build_centerline(
 
 
 def build_geometry_record(
-    location: pd.DataFrame,
-    laps: pd.DataFrame,
-    *,
-    session_key: int,
-    meeting_key: int,
-    circuit_id: str,
-    sample_laps: int = DEFAULT_SAMPLE_LAPS,
-    point_count: int = DEFAULT_POINT_COUNT,
-    orientation_lap: int = DEFAULT_ORIENTATION_LAP,
-    ingested_at: pd.Timestamp | None = None,
+        location: pd.DataFrame,
+        laps: pd.DataFrame,
+        *,
+        session_key: int,
+        meeting_key: int,
+        circuit_id: str,
+        sample_laps: int = DEFAULT_SAMPLE_LAPS,
+        point_count: int = DEFAULT_POINT_COUNT,
+        orientation_lap: int = DEFAULT_ORIENTATION_LAP,
+        ingested_at: pd.Timestamp | None = None,
 ) -> dict[str, Any]:
     centerline, samples, quality = build_centerline(
         location,
@@ -493,23 +493,8 @@ def _validate_geometry_frame(frame: pd.DataFrame) -> None:
         raise TrackGeometryError(str(exc)) from exc
 
 
-def _atomic_parquet(frame: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=path.parent, prefix=f".{path.name}.", suffix=".parquet", delete=False
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-        frame.to_parquet(temporary_path, index=False)
-        temporary_path.replace(path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-
-
 def write_geometry_record(
-    record: dict[str, Any], path: Path = GEOMETRY_PATH
+        record: dict[str, Any], path: Path = GEOMETRY_PATH
 ) -> Path:
     existing = pd.DataFrame(columns=GEOMETRY_COLUMNS)
     if path.exists():
@@ -522,7 +507,7 @@ def write_geometry_record(
         item
         for item in records
         if item.get("geometry_id") != record.get("geometry_id")
-        and item.get("source_record_key") != record.get("source_record_key")
+           and item.get("source_record_key") != record.get("source_record_key")
     ]
     records.append(record)
     frame = pd.DataFrame(records)
@@ -531,7 +516,7 @@ def write_geometry_record(
             frame[column] = None
     frame = frame[GEOMETRY_COLUMNS]
     _validate_geometry_frame(frame)
-    _atomic_parquet(frame, path)
+    atomic_parquet(frame, path)
     return path
 
 
@@ -545,6 +530,12 @@ def _record_data(record: dict[str, Any]) -> dict[str, Any]:
         raise TrackGeometryError("Geometry data contains invalid JSON.") from exc
     if not isinstance(data, dict) or not isinstance(data.get("points"), list):
         raise TrackGeometryError("Geometry data does not contain a point list.")
+    try:
+        data["source_session_key"] = int(data["source_session_key"])
+        if data.get("source_meeting_key") is not None:
+            data["source_meeting_key"] = int(data["source_meeting_key"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise TrackGeometryError("Geometry data contains invalid source keys.") from exc
     return data
 
 
@@ -572,11 +563,11 @@ def _track_geometry_from_record(record: dict[str, Any]) -> TrackGeometry:
 
 
 def load_track_geometry(
-    session_key: int,
-    *,
-    meeting_key: int | None = None,
-    circuit_id: str | None = None,
-    path: Path = GEOMETRY_PATH,
+        session_key: int,
+        *,
+        meeting_key: int | None = None,
+        circuit_id: str | None = None,
+        path: Path = GEOMETRY_PATH,
 ) -> TrackGeometry | None:
     if not path.exists():
         return None
@@ -618,12 +609,12 @@ def _session_context(session_key: int) -> tuple[int, int, str]:
 
 
 def build_session_geometry(
-    session_key: int,
-    *,
-    sample_laps: int = DEFAULT_SAMPLE_LAPS,
-    point_count: int = DEFAULT_POINT_COUNT,
-    orientation_lap: int = DEFAULT_ORIENTATION_LAP,
-    path: Path = GEOMETRY_PATH,
+        session_key: int,
+        *,
+        sample_laps: int = DEFAULT_SAMPLE_LAPS,
+        point_count: int = DEFAULT_POINT_COUNT,
+        orientation_lap: int = DEFAULT_ORIENTATION_LAP,
+        path: Path = GEOMETRY_PATH,
 ) -> tuple[Path, dict[str, Any]]:
     laps_path = RAW_DATA_DIR / f"openf1_{session_key}_laps.parquet"
     location_path = RAW_DATA_DIR / f"openf1_{session_key}_location.parquet"
@@ -677,4 +668,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

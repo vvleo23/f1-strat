@@ -6,10 +6,18 @@ import unittest
 
 import pandas as pd
 
-from f1_pipeline.master_data import build_tables
+from f1_pipeline.master_data import build_tables, master_table_path
 
 
 class MasterDataTest(unittest.TestCase):
+    def test_master_paths_are_partitioned_by_season(self) -> None:
+        path_2025 = master_table_path("session", 2025)
+        path_2026 = master_table_path("session", 2026)
+
+        self.assertNotEqual(path_2025, path_2026)
+        self.assertEqual(path_2025.parent.name, "season=2025")
+        self.assertEqual(path_2026.parent.name, "season=2026")
+
     def test_postponed_meeting_links_to_replacement_and_geometry_stays_empty(self) -> None:
         ingested_at = pd.Timestamp("2026-08-13T11:00:00Z")
         meetings = [

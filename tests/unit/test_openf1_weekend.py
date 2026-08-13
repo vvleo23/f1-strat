@@ -49,6 +49,22 @@ class OpenF1WeekendTest(unittest.TestCase):
         self.assertIn("intervals", plans[0]["skipped_endpoints"])
         self.assertIn("pit", plans[-1]["required_endpoints"])
 
+        replay = plan_weekend_sessions(
+            [
+                {
+                    "session_id": "openf1:session:4",
+                    "source_session_key": 4,
+                    "session_type": "Race",
+                    "session_name": "Race",
+                    "status": "completed",
+                }
+            ],
+            purpose="replay",
+        )[0]
+        self.assertIn("sessions", replay["required_endpoints"])
+        self.assertIn("location", replay["required_endpoints"])
+        self.assertNotIn("location", replay["skipped_endpoints"])
+
 
 if __name__ == "__main__":
     unittest.main()

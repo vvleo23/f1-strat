@@ -1,6 +1,8 @@
 fastf1
+numpy
 pandas
 requests
+urllib3
 matplotlib
 seaborn
 plotly

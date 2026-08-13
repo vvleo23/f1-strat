@@ -2,26 +2,28 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import pandas as pd
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from f1_pipeline.data_validation import DataValidationError, validate_frame
 from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
 from f1_pipeline.session_facts import FACT_NAMES, SessionFactError, normalize_session_fact
 from f1_pipeline.settings import CURATED_DATA_DIR, PROJECT_ROOT, RAW_DATA_DIR
+from f1_pipeline.sources.openf1 import (
+    JsonClient,
+    OpenF1Client,
+    OpenF1Error,
+    make_parquet_safe,
+    session_cache_path,
+    write_latest_parquet,
+)
 
-BASE_URL = "https://api.openf1.org/v1"
-REQUEST_TIMEOUT_SECONDS = 90
-MIN_REQUEST_INTERVAL_SECONDS = 2.1
 ENDPOINTS = (
+    "sessions",
     "drivers",
     "laps",
     "intervals",
@@ -30,6 +32,7 @@ ENDPOINTS = (
     "stints",
     "race_control",
     "weather",
+    "location",
 )
 REQUIRED_BY_SESSION_TYPE = {
     "practice": frozenset({"drivers", "laps", "stints", "weather"}),
@@ -60,6 +63,7 @@ OPTIONAL_BY_SESSION_TYPE = {
 }
 ALLOW_EMPTY = frozenset({"intervals", "pit", "race_control"})
 REQUIRED_COLUMNS = {
+    "sessions": {"session_key", "meeting_key", "session_name", "date_start"},
     "drivers": {"session_key", "driver_number", "name_acronym"},
     "laps": {"session_key", "driver_number", "lap_number", "date_start"},
     "intervals": {"session_key", "driver_number", "date", "gap_to_leader", "interval"},
@@ -68,8 +72,10 @@ REQUIRED_COLUMNS = {
     "stints": {"session_key", "driver_number", "stint_number", "lap_start", "compound"},
     "race_control": {"session_key", "date", "message"},
     "weather": {"session_key", "date"},
+    "location": {"session_key", "driver_number", "date", "x", "y", "z"},
 }
 KEY_COLUMNS = {
+    "sessions": ("session_key",),
     "drivers": ("session_key", "driver_number"),
     "laps": ("session_key", "driver_number", "lap_number"),
     "intervals": ("session_key", "driver_number", "date"),
@@ -78,8 +84,10 @@ KEY_COLUMNS = {
     "stints": ("session_key", "driver_number", "stint_number"),
     "race_control": ("session_key", "date", "message"),
     "weather": ("session_key", "date"),
+    "location": ("session_key", "driver_number", "date"),
 }
 DATETIME_COLUMNS = {
+    "sessions": ("date_start",),
     "drivers": (),
     "laps": ("date_start",),
     "intervals": ("date",),
@@ -88,8 +96,10 @@ DATETIME_COLUMNS = {
     "stints": (),
     "race_control": ("date",),
     "weather": ("date",),
+    "location": ("date",),
 }
 NUMERIC_COLUMNS = {
+    "sessions": ("session_key", "meeting_key"),
     "drivers": ("session_key", "driver_number"),
     "laps": ("session_key", "driver_number", "lap_number", "lap_duration"),
     "intervals": ("session_key", "driver_number"),
@@ -114,8 +124,10 @@ NUMERIC_COLUMNS = {
         "wind_speed",
         "wind_direction",
     ),
+    "location": ("session_key", "driver_number", "x", "y", "z"),
 }
 REQUIRED_NON_NULL = {
+    "sessions": ("session_key", "meeting_key", "session_name", "date_start"),
     "drivers": ("session_key", "driver_number", "name_acronym"),
     "laps": ("session_key", "driver_number", "lap_number"),
     "intervals": ("session_key", "driver_number", "date"),
@@ -124,6 +136,7 @@ REQUIRED_NON_NULL = {
     "stints": ("session_key", "driver_number", "stint_number", "lap_start"),
     "race_control": ("session_key", "date", "message"),
     "weather": ("session_key", "date"),
+    "location": ("session_key", "driver_number", "date", "x", "y", "z"),
 }
 
 
@@ -131,55 +144,9 @@ class OpenF1WeekendError(RuntimeError):
     pass
 
 
-class JsonClient(Protocol):
-    def get_json(self, endpoint: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        ...
-
-
-class OpenF1WeekendClient:
+class OpenF1WeekendClient(OpenF1Client):
     def __init__(self) -> None:
-        try:
-            import truststore
-        except ImportError as exc:
-            raise OpenF1WeekendError(
-                "The 'truststore' package is missing. Run 'pip install -r requirements.txt'."
-            ) from exc
-        truststore.inject_into_ssl()
-        retry = Retry(
-            total=4,
-            connect=4,
-            read=4,
-            status=4,
-            backoff_factor=1.0,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset({"GET"}),
-            respect_retry_after_header=True,
-        )
-        self.session = requests.Session()
-        self.session.mount("https://", HTTPAdapter(max_retries=retry))
-        self.session.headers.update({"User-Agent": "f1-strat/1.0"})
-        self._last_request_at = 0.0
-
-    def get_json(self, endpoint: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        elapsed = time.monotonic() - self._last_request_at
-        if elapsed < MIN_REQUEST_INTERVAL_SECONDS:
-            time.sleep(MIN_REQUEST_INTERVAL_SECONDS - elapsed)
-        try:
-            response = self.session.get(
-                f"{BASE_URL}/{endpoint}", params=params, timeout=REQUEST_TIMEOUT_SECONDS
-            )
-            self._last_request_at = time.monotonic()
-            response.raise_for_status()
-            payload = response.json()
-        except requests.exceptions.Timeout as exc:
-            raise OpenF1WeekendError(f"OpenF1 endpoint '{endpoint}' timed out.") from exc
-        except requests.exceptions.JSONDecodeError as exc:
-            raise OpenF1WeekendError(f"OpenF1 endpoint '{endpoint}' returned invalid JSON.") from exc
-        except requests.exceptions.RequestException as exc:
-            raise OpenF1WeekendError(f"OpenF1 endpoint '{endpoint}' failed: {exc}") from exc
-        if not isinstance(payload, list) or not all(isinstance(row, dict) for row in payload):
-            raise OpenF1WeekendError(f"OpenF1 endpoint '{endpoint}' returned an invalid payload.")
-        return payload
+        super().__init__(error_type=OpenF1WeekendError, user_agent="f1-strat/1.0")
 
 
 def _relative(path: Path) -> str:
@@ -206,7 +173,11 @@ def normalize_session_type(session_type: str, session_name: str = "") -> str:
     )
 
 
-def plan_weekend_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def plan_weekend_sessions(
+        sessions: list[dict[str, Any]],
+        *,
+        purpose: str = "weekend",
+) -> list[dict[str, Any]]:
     plans: list[dict[str, Any]] = []
     for session in sessions:
         if str(session.get("status", "")).casefold() == "cancelled":
@@ -223,6 +194,8 @@ def plan_weekend_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]
         )
         required = REQUIRED_BY_SESSION_TYPE[normalized_type]
         optional = OPTIONAL_BY_SESSION_TYPE[normalized_type]
+        if purpose == "replay":
+            required = required | {"sessions", "location"}
         skipped = frozenset(ENDPOINTS).difference(required | optional)
         plans.append(
             {
@@ -231,7 +204,7 @@ def plan_weekend_sessions(sessions: list[dict[str, Any]]) -> list[dict[str, Any]
                 "normalized_session_type": normalized_type,
                 "required_endpoints": sorted(required),
                 "optional_endpoints": sorted(optional),
-                "skipped_endpoints": sorted({"location", *skipped}),
+                "skipped_endpoints": sorted(skipped),
             }
         )
     return plans
@@ -263,19 +236,8 @@ def _validate_source_frame(endpoint: str, frame: pd.DataFrame, session_key: int)
         raise OpenF1WeekendError(str(exc)) from exc
 
 
-def _parquet_safe(endpoint: str, frame: pd.DataFrame) -> pd.DataFrame:
-    safe = frame.copy()
-    if endpoint == "intervals":
-        for column in ("gap_to_leader", "interval"):
-            if column in safe.columns:
-                safe[column] = safe[column].map(
-                    lambda value: None if pd.isna(value) else str(value)
-                )
-    return safe
-
-
 def _snapshot_path(
-    raw_dir: Path, session_key: int, endpoint: str, frame: pd.DataFrame
+        raw_dir: Path, session_key: int, endpoint: str, frame: pd.DataFrame
 ) -> Path:
     snapshot_dir = raw_dir / "snapshots" / "openf1" / str(session_key)
     temporary_path = snapshot_dir / f".{endpoint}_{time.time_ns()}.parquet"
@@ -290,9 +252,11 @@ def _snapshot_path(
 
 
 def _cached_snapshot(
-    raw_dir: Path, session_key: int, endpoint: str
+        raw_dir: Path, session_key: int, endpoint: str
 ) -> tuple[pd.DataFrame, Path] | None:
-    latest = raw_dir / f"openf1_{session_key}_{endpoint}.parquet"
+    latest = session_cache_path(session_key, endpoint)
+    if raw_dir != RAW_DATA_DIR:
+        latest = raw_dir / latest.name
     if not latest.exists():
         return None
     frame = pd.read_parquet(latest)
@@ -306,12 +270,12 @@ def _cached_snapshot(
 
 
 def _load_endpoint(
-    client: JsonClient,
-    endpoint: str,
-    session_key: int,
-    *,
-    refresh: bool,
-    raw_dir: Path,
+        client: JsonClient,
+        endpoint: str,
+        session_key: int,
+        *,
+        refresh: bool,
+        raw_dir: Path,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     if not refresh:
         try:
@@ -332,7 +296,7 @@ def _load_endpoint(
             }
     retrieved_at = datetime.now(timezone.utc)
     payload = client.get_json(endpoint, {"session_key": session_key})
-    frame = _parquet_safe(
+    frame = make_parquet_safe(
         endpoint,
         pd.DataFrame(payload, columns=sorted(REQUIRED_COLUMNS[endpoint]))
         if not payload
@@ -340,7 +304,10 @@ def _load_endpoint(
     )
     _validate_source_frame(endpoint, frame, session_key)
     snapshot = _snapshot_path(raw_dir, session_key, endpoint, frame)
-    atomic_parquet(frame, raw_dir / f"openf1_{session_key}_{endpoint}.parquet")
+    latest = session_cache_path(session_key, endpoint)
+    if raw_dir != RAW_DATA_DIR:
+        latest = raw_dir / latest.name
+    write_latest_parquet(frame, latest)
     return frame, {
         "status": "available",
         "fetched": True,
@@ -353,7 +320,7 @@ def _load_endpoint(
 
 
 def _session_status(
-    required: set[str], optional: set[str], endpoints: dict[str, dict[str, Any]]
+        required: set[str], optional: set[str], endpoints: dict[str, dict[str, Any]]
 ) -> str:
     required_failed = any(
         endpoints[name]["status"] == "unavailable"
@@ -374,12 +341,12 @@ def _session_status(
 
 
 def ingest_session(
-    plan: dict[str, Any],
-    *,
-    client: JsonClient,
-    refresh: bool,
-    raw_dir: Path,
-    curated_dir: Path,
+        plan: dict[str, Any],
+        *,
+        client: JsonClient,
+        refresh: bool,
+        raw_dir: Path,
+        curated_dir: Path,
 ) -> dict[str, Any]:
     session_key = int(plan["source_session_key"])
     required = set(plan["required_endpoints"])
@@ -397,7 +364,7 @@ def ingest_session(
             )
             frames[endpoint] = frame
             endpoint_results[endpoint] = result
-        except (OpenF1WeekendError, OSError, ValueError, TypeError) as exc:
+        except (OpenF1Error, OpenF1WeekendError, OSError, ValueError, TypeError) as exc:
             endpoint_results[endpoint] = {
                 "status": "unavailable",
                 "row_count": 0,
@@ -409,9 +376,6 @@ def ingest_session(
         if endpoint not in FACT_NAMES:
             continue
         result = endpoint_results[endpoint]
-        raw_path = Path(result["raw_path"])
-        if not raw_path.is_absolute():
-            raw_path = PROJECT_ROOT / raw_path
         retrieved_at = pd.Timestamp(result["retrieved_at"])
         try:
             fact_name, facts = normalize_session_fact(
@@ -425,10 +389,10 @@ def ingest_session(
                 laps=frames.get("laps"),
             )
             fact_path = (
-                curated_dir
-                / "facts"
-                / fact_name
-                / f"openf1_session_{session_key}_{str(result['raw_sha256'])[:16]}.parquet"
+                    curated_dir
+                    / "facts"
+                    / fact_name
+                    / f"openf1_session_{session_key}_{str(result['raw_sha256'])[:16]}.parquet"
             )
             if not fact_path.exists():
                 atomic_parquet(facts, fact_path)
@@ -456,10 +420,10 @@ def ingest_session(
     )
     manifest_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
     manifest_path = (
-        curated_dir
-        / "manifests"
-        / "openf1_sessions"
-        / f"session_{session_key}_{manifest_id}.json"
+            curated_dir
+            / "manifests"
+            / "openf1_sessions"
+            / f"session_{session_key}_{manifest_id}.json"
     )
     manifest = {
         "schema_version": 1,
@@ -483,15 +447,16 @@ def ingest_session(
 
 
 def ingest_weekend(
-    sessions: list[dict[str, Any]],
-    *,
-    meeting_key: int,
-    refresh: bool = False,
-    client: JsonClient | None = None,
-    raw_dir: Path = RAW_DATA_DIR,
-    curated_dir: Path = CURATED_DATA_DIR,
+        sessions: list[dict[str, Any]],
+        *,
+        meeting_key: int,
+        purpose: str = "weekend",
+        refresh: bool = False,
+        client: JsonClient | None = None,
+        raw_dir: Path = RAW_DATA_DIR,
+        curated_dir: Path = CURATED_DATA_DIR,
 ) -> tuple[dict[str, Any], Path]:
-    plans = plan_weekend_sessions(sessions)
+    plans = plan_weekend_sessions(sessions, purpose=purpose)
     if not plans:
         raise OpenF1WeekendError(f"Meeting {meeting_key} has no ingestible sessions.")
     api = client or OpenF1WeekendClient()
@@ -526,9 +491,9 @@ def ingest_weekend(
     )
     run_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
     manifest_path = (
-        curated_dir
-        / "manifests"
-        / f"openf1_weekend_{meeting_key}_{run_id}.json"
+            curated_dir
+            / "manifests"
+            / f"openf1_weekend_{meeting_key}_{run_id}.json"
     )
     manifest = {
         "schema_version": 1,
@@ -543,5 +508,3 @@ def ingest_weekend(
     else:
         atomic_json(manifest, manifest_path)
     return manifest, manifest_path
-
-

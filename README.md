@@ -12,15 +12,44 @@ Free live OpenF1 data is not assumed. The MVP loads historical data after a sess
 
 The current acceptance case remains the 2026 Hungarian Grand Prix race at the Hungaroring, OpenF1 `session_key=11342`. Belgium 2026 (`session_key=11334`) remains a replay regression case, and Zandvoort 2025 (`session_key=9920`) verifies reusable geometry.
 
+### System context
+
+```mermaid
+flowchart LR
+    OpenF1[OpenF1<br/>weekend and race timeline]
+    FastF1[FastF1<br/>independent cross-check]
+    Wikidata[Wikidata<br/>reviewed circuit identity]
+    OpenMeteo[Open-Meteo<br/>weather forecasts]
+
+    Pipeline[F1 weekend data pipeline]
+    Store[(Parquet snapshots,<br/>curated data, and manifests)]
+    Replay[Historical point-in-time replay]
+    Analysis[Pace and source analysis]
+    Calculations["Calculation snapshots and<br/>strategy recommendations<br/>(planned)"]
+    UI["Read-only dashboard<br/>(planned)"]
+
+    OpenF1 --> Pipeline
+    FastF1 --> Pipeline
+    Wikidata --> Pipeline
+    OpenMeteo --> Pipeline
+    Pipeline --> Store
+    Store --> Replay
+    Store --> Analysis
+    Replay -.-> Calculations
+    Store -.-> Calculations
+    Store -.-> UI
+    Calculations -.-> UI
+```
+
 ## Feature overview
 
 | Capability | Intended output | Phase | Current status |
 |---|---|---|---|
-| Race-weekend pipeline | Selected meeting, discovered sessions, snapshots, manifests, retries, and finalization | Pipeline MVP | Hungary ingestion implemented; scheduling planned |
+| Race-weekend pipeline | Selected meeting, discovered sessions, snapshots, manifests, retries, and finalization | Pipeline MVP | Generic purpose planner and Hungary ingestion implemented; scheduling planned |
 | Historical event replay | Chronological race state with a strict future-data boundary | Pipeline MVP | Partly point-in-time-conformant |
 | Weather pipeline | Immutable Open-Meteo forecasts plus separate OpenF1/FastF1 observations | Pipeline MVP | Hungary weekend weather pipeline implemented |
 | Season overview | Calendar, sessions, driver/team standings, wins, and podium counts | After pipeline MVP | Planned |
-| Qualifying calculation | Predicted positions and Top-10/Top-3 probabilities from completed weekend sessions | Later analysis | Planned |
+| Qualifying calculation | Full predicted classification plus per-driver Top-15/Top-10/Top-3 probabilities and teammate comparison | Later analysis | Planned |
 | Race calculation | Online strategy and pit-window recommendations from the current replay state | MVP | Planned |
 | Dashboard | Small read-only view of curated data, replay, weather, and calculation history | MVP | Planned |
 
@@ -31,7 +60,7 @@ Rain radar is rejected. Paid live streaming and complex strategy optimization ar
 Selecting a race weekend always loads meeting and session metadata first. Data jobs then use an explicit purpose instead of downloading every high-volume endpoint blindly:
 
 - **Replay:** load the selected completed race and its required replay endpoints.
-- **Qualifying calculation:** load only practice or sprint-practice sessions completed before `decision_time`.
+- **Qualifying calculation:** load sessions completed before the target qualifying session and available by `decision_time`; the later feature contract decides which practice, sprint, weather, and tyre inputs are admissible.
 - **Race calculation:** load completed practice, qualifying, sprint, and race observations available before `decision_time`.
 - **Cross-check:** load matching FastF1 sessions when available without blocking OpenF1 processing.
 
@@ -39,9 +68,11 @@ Sprint and changed weekend formats are discovered from session metadata; session
 
 The implemented `weekend_facts` profile loads drivers, laps, stints, weather, and the applicable position, pit, interval, and Race Control endpoints for every completed session. Practice and qualifying do not request the unavailable `intervals` endpoint. High-volume `location` remains opt-in for replay or geometry and is not duplicated into general Silver facts.
 
+The current closest equivalent to “load the complete weekend” is `purpose=weekend` without session filters and with a `decision_time` after the last completed session. It loads the applicable OpenF1 weekend-fact profile plus the reviewed circuit and one target-session weather forecast. It is not yet an all-source export: it excludes location for every session, telemetry, results and standings, a full matching FastF1 weekend, and multiple scheduled forecast vintages.
+
 ## Current status
 
-Last updated: **25 August 2026**
+Last updated: **28 August 2026**
 
 ### Implemented
 
@@ -56,6 +87,11 @@ Last updated: **25 August 2026**
 - manual F1-Wikidata-Open-Meteo weekend weather pipeline with an idempotent run manifest
 - complete Hungary 2026 ingestion for Practice 1, Practice 2, Practice 3, Qualifying, and Race
 - validated full-weekend or selective ingestion by session key and canonical session type
+- purpose-based `weekend`, `replay`, `qualifying_prediction`, and `race_strategy` session planning at an explicit `decision_time`
+- season-partitioned authoritative master dimensions with temporary 2026 legacy aliases
+- one shared OpenF1 HTTP transport and Bronze cache-path convention for master data, weekend ingestion, replay, and verification
+- automatic conservative selection of the latest historical ECMWF model cycle available at `decision_time`
+- central point-in-time weather cut selecting one available forecast vintage and only already available track observations
 - immutable OpenF1 endpoint snapshots, session manifests, and a combined weekend-facts manifest
 - canonical Silver `session_entry`, `lap`, `interval`, `position`, `pit_stop`, `stint`, `race_control_event`, and `weather_observation` facts
 - session-local centerlines for Hungary 2026 and Zandvoort 2025
@@ -66,7 +102,7 @@ Last updated: **25 August 2026**
 ### Partly implemented
 
 - OpenF1 and FastF1 are compared at aggregate driver level, not reconciled field by field.
-- The weekend weather pipeline supports one reviewed circuit and one explicit historical run; unknown circuits produce review candidates, but scheduled future forecast capture is not implemented.
+- The weekend weather pipeline supports one reviewed circuit; unknown circuits produce review candidates, but the remaining 2026 circuit mappings and scheduled future forecast capture are not implemented.
 - The manual orchestrator is restartable and idempotent; persisted retry scheduling and finalization are not implemented.
 - Sprint session planning is implemented and unit-tested, but the current Hungary acceptance weekend has no Sprint.
 - Track centerlines are local OpenF1 display geometry, not geographic map geometry.
@@ -94,9 +130,12 @@ f1-strat/
 │   ├── analysis/               # Derived analyses
 │   ├── replay/                 # Point-in-time replay
 │   ├── sources/                # Source verification and ingestion
+│   │   └── openf1.py           # Shared OpenF1 transport and Bronze path conventions
 │   ├── data_validation.py
+│   ├── planning.py              # Purpose and decision-time session planning
 │   ├── persistence.py          # Atomic file persistence and hashing
 │   ├── session_facts.py        # Canonical OpenF1 Silver facts
+│   ├── weather.py              # Point-in-time forecasts and track observations
 │   ├── geometry.py
 │   ├── geometry_preview.py
 │   └── master_data.py
@@ -112,31 +151,69 @@ f1-strat/
 
 ## Pipeline
 
-```text
-select meeting and optional session subset
-      |
-      v
-discover sessions and required job profile
-      |
-      v
-OpenF1 / FastF1 / Open-Meteo
-      |
-      v
-data/raw/        Bronze: immutable source evidence and request metadata
-      |
-      v
-validation and normalization
-      |
-      v
-data/curated/    Silver: typed dimensions, facts, events, and forecasts
-      |
-      +----> decision-time replay ----> calculation snapshots
-      |
-      v
-data/artifacts/  Gold: verification, analyses, replays, and later UI data
+### Architecture and data zones
+
+```mermaid
+flowchart LR
+    subgraph Sources[External sources]
+        OF1[OpenF1]
+        FF1[FastF1]
+        WD[Wikidata]
+        OM[Open-Meteo]
+    end
+
+    subgraph PipelineServices[Pipeline services]
+        Select[Meeting selection and<br/>purpose-based session planning]
+        Ingest[Bounded source ingestion]
+        Validate[Validation and normalization]
+        Persist[Atomic persistence and hashing]
+    end
+
+    subgraph Bronze["Bronze — data/raw"]
+        Raw[Immutable source snapshots<br/>and request evidence]
+    end
+
+    subgraph Silver["Silver — data/curated"]
+        Dimensions[Typed dimensions]
+        Facts[Temporal facts and forecasts]
+        Manifests[Run and lineage manifests]
+    end
+
+    subgraph Consumers[Point-in-time consumers]
+        Cut[Decision-time data cut]
+        RaceState[Race State and features]
+        Strategy["Calculation snapshots and<br/>strategy service — planned"]
+    end
+
+    subgraph Gold["Gold — data/artifacts"]
+        Verification[Verification reports]
+        Analyses[Analyses and replays]
+        Presentation["Read-only dashboard — planned"]
+    end
+
+    Sources --> Select
+    Select --> Ingest
+    Ingest --> Raw
+    Raw --> Validate
+    Validate --> Persist
+    Persist --> Dimensions
+    Persist --> Facts
+    Persist --> Manifests
+    Dimensions --> Cut
+    Facts --> Cut
+    Manifests --> Cut
+    Cut --> RaceState
+    RaceState -.-> Strategy
+    Dimensions --> Verification
+    Facts --> Verification
+    Manifests --> Verification
+    Facts --> Analyses
+    RaceState --> Analyses
+    Strategy -.-> Presentation
+    Analyses -.-> Presentation
 ```
 
-The manual weekend weather pipeline now runs OpenF1 master-data selection, validated session-subset selection, session-fact ingestion, Silver normalization, reviewed Wikidata coordinates, Open-Meteo normalization, and a final content-identified manifest. Session filters, resolved session keys, reviewed-circuit registry provenance, and candidate-review context are part of the schema-v3 manifest and run identity. Persisted retry scheduling and automatic finalization are not implemented yet. Parquet is the authoritative project store; the SQLite file in `cache/` belongs only to FastF1. A later DuckDB integration may provide read-only queries over Parquet but must not become a second source of truth.
+The manual weekend weather pipeline now runs OpenF1 master-data selection, purpose- and decision-time-based session planning, session-fact ingestion, Silver normalization, reviewed Wikidata coordinates, Open-Meteo normalization, and a final content-identified manifest. Purpose, target session, session filters, resolved session keys, reviewed-circuit registry provenance, and candidate-review context are part of the schema-v5 manifest and run identity. Master dimensions are authoritative below `data/curated/dimensions/season=<year>/`; unpartitioned 2026 files remain temporary compatibility aliases. The F1 path is generic for discovered regular and Sprint sessions, but weather remains fail-closed until each 2026 circuit has a reviewed registry mapping. Persisted retry scheduling and automatic finalization are not implemented yet. Parquet is the authoritative project store; the SQLite file in `cache/` belongs only to FastF1. A later DuckDB integration may provide read-only queries over Parquet but must not become a second source of truth.
 
 Failed or incomplete responses never replace the last valid snapshot. Every source or feature uses `available`, `partial`, `stale`, or `unavailable`; missing data remains missing.
 
@@ -157,11 +234,35 @@ These are target defaults, not assumptions that every provider publishes on time
 
 The current Silver model contains eight dimensions:
 
-```text
-season 1---n meeting 1---n session
-meeting n---1 country
-meeting n---1 circuit 1---n circuit_geometry
-season 1---n driver n---1 team
+```mermaid
+erDiagram
+    SEASON ||--o{ MEETING : contains
+    SEASON ||--o{ DRIVER : registers
+    SEASON ||--o{ TEAM : registers
+    COUNTRY ||--o{ MEETING : hosts
+    CIRCUIT ||--o{ MEETING : hosts
+    CIRCUIT ||--o{ CIRCUIT_GEOMETRY : has
+    MEETING ||--o{ SESSION : contains
+
+    SESSION ||--o{ SESSION_ENTRY : has
+    DRIVER ||--o{ SESSION_ENTRY : participates
+    TEAM ||--o{ SESSION_ENTRY : enters
+
+    SESSION ||--o{ LAP : records
+    SESSION ||--o{ INTERVAL : records
+    SESSION ||--o{ POSITION : records
+    SESSION ||--o{ PIT_STOP : records
+    SESSION ||--o{ STINT : records
+    SESSION ||--o{ RACE_CONTROL_EVENT : records
+    SESSION ||--o{ WEATHER_OBSERVATION : records
+    SESSION ||--o{ WEATHER_FORECAST : targets
+    CIRCUIT ||--o{ WEATHER_FORECAST : locates
+
+    SESSION_ENTRY ||--o{ LAP : completes
+    SESSION_ENTRY ||--o{ INTERVAL : has
+    SESSION_ENTRY ||--o{ POSITION : has
+    SESSION_ENTRY ||--o{ PIT_STOP : makes
+    SESSION_ENTRY ||--o{ STINT : completes
 ```
 
 Source identities remain visible in stable IDs such as `openf1:session:11342`. Current session data stays source-shaped in Bronze:
@@ -194,6 +295,7 @@ next chronological trigger
 
 - Race observations are released by their source event timestamp; later race observations remain invisible.
 - A forecast is visible only when `available_at <= decision_time` and is evaluated for its separate `valid_time`.
+- Weather consumers use `weather.build_weather_cut` so later forecasts and track observations cannot enter an earlier calculation.
 - `run_initialized_at` is not proof of availability because weather models require computation and distribution time.
 - Recalculation triggers are race start, lap completion, Race Control state changes, pit stops, and newly available forecast snapshots.
 - Trigger IDs make repeated processing idempotent. Late data creates a new version; it does not silently rewrite an earlier result.
@@ -215,18 +317,57 @@ next chronological trigger
 
 | Source | Responsibility | Status |
 |---|---|---|
-| [OpenF1](docs/sources/openf1.md) | Meeting/session discovery, replay events, results, standings, and local vehicle coordinates | Race path implemented |
-| [FastF1](docs/sources/fastf1.md) | Matching historical sessions, laps, tyres, telemetry, weather, and cross-checks | Race cross-check implemented |
+| [OpenF1](docs/sources/openf1.md) | Meeting/session discovery, replay events, and local vehicle coordinates; results and standings are planned | Weekend and replay paths implemented |
+| [FastF1](docs/sources/fastf1.md) | Race laps, tyres, observed weather, and independent comparison; telemetry and weekend loading are planned | Hungary race cross-check implemented |
 | [Open-Meteo](docs/sources/open-meteo.md) | Immutable point-in-time forecast runs and forecast evaluation data | Hungary Single Run implemented |
 | [Wikidata](docs/sources/wikidata.md) | Reviewed WGS84 circuit reference points for weather requests | Hungaroring mapping implemented |
 
 Overlapping source rows are never blindly merged or counted twice. Each feature declares one primary source, while cross-check data remains separately identifiable.
+
+### Bronze boundary and source-to-feature traceability
+
+The provider API or library is outside the project data lake. **Bronze, or Stage 1, starts when the project persists the source-shaped response together with request, retrieval, identity, status, and hash evidence.** OpenF1 and FastF1 tabular responses are stored as raw Parquet, while Open-Meteo and Wikidata evidence is stored as immutable JSON. The FastF1 SQLite file is only an HTTP cache. Normalized facts, dimensions, and the locally derived circuit centerline are Silver rather than raw source data.
+
+| Source | Persisted Bronze / Stage 1 | Consumer or feature | Role and state |
+|---|---|---|---|
+| OpenF1 `meetings`, `sessions` | Event keys, names, types, scheduled start/end times | Season/weekend/session selection, planner, replay boundary | Primary; backend implemented, dashboard planned |
+| OpenF1 `drivers` | Driver number, acronym, team, colour, session identity | Driver/team dimensions, session entries, replay labels | Primary; implemented |
+| OpenF1 `laps`, `stints` | Lap and sector timing, stint, compound and tyre age | Pace analysis, replay; later qualifying and strategy features | Primary; ingestion implemented, calculations planned |
+| OpenF1 `intervals`, `position`, `pit` | Gaps, order, position changes and pit stops | Re-live state and later field-aware strategy | Primary; implemented for applicable session types |
+| OpenF1 `race_control` | Timestamped flags, categories and messages | Re-live event feed and track-status triggers | Primary; facts implemented, dashboard panel planned |
+| OpenF1 `weather` | Timestamped track observations | Weather cut, forecast evaluation and later re-live context | Primary observation; implemented |
+| OpenF1 `location` | Timestamped local `x/y/z` vehicle coordinates | Circle/track replay progress and Silver local centerline | Primary display input; implemented and high-volume opt-in |
+| OpenF1 results and standings | Not persisted yet | Season standings, race results, wins and podiums | Planned |
+| FastF1 laps, tyres and weather | Hungary race laps and observed weather Parquet | Separate driver-level pace and source cross-check | Cross-check; partly implemented |
+| FastF1 telemetry | Not loaded; telemetry is currently disabled | Possible later speed, throttle, brake, gear and RPM analysis | Planned, with no current consumer |
+| Open-Meteo Single Run | Model run, hourly values, units, grid and request evidence | Point-in-time forecast for replay, qualifying and strategy | Primary forecast; Hungary implemented, wider capture planned |
+| Wikidata entity and `P625` | Entity response, source revision and WGS84 point | Reviewed circuit identity and Open-Meteo request coordinate | Supporting master source; Hungaroring implemented |
+
+OpenF1 `location.x/y/z` is not a geographic track map. The stored track view is a Silver centerline derived from vehicle paths. Wikidata supplies one independent WGS84 weather reference point, not the track shape. No source currently supplies persisted project telemetry.
 
 ## Presentation boundary
 
 The dashboard follows the reliable pipeline, Calculation Snapshots, and strategy service. The preferred first implementation is Streamlit with Plotly because it matches the Python and Parquet stack. It remains a small read-only consumer of curated data and artifacts: no source requests, snapshot writes, orchestration, or model fitting inside UI code. A custom frontend or Dash is considered only if replay interaction cannot be delivered simply.
 
 The MVP overview contains the season calendar and session selector, driver and team standings, wins, podiums, and other small tables. The replay view contains a driver order and position list, the race on the stored track layout, the point-in-time weather forecast, Race Control events, the current strategy recommendation, its pit window, assumptions, and alternatives. Complex custom visualizations remain excluded from the first dashboard.
+
+### Two-page product view and current gaps
+
+| Product area | Available foundation | Missing before the target product is usable |
+|---|---|---|
+| Page 1 — season overview | Season, meeting, session, driver and team dimensions; purpose-based backend selection | Dashboard, results and standings ingestion, wins/podium aggregates and current-version read model |
+| Year/weekend/session selection | Generic planner and validated CLI filters | UI controls and persisted job/status service |
+| Purpose-based loading | `weekend`, `replay`, `qualifying_prediction`, and `race_strategy` session plans; session-type endpoint profiles | Feature-level endpoint plans across all sources and automatic finalization |
+| Complete-weekend action | Manual idempotent `purpose=weekend` CLI run for completed session facts | Explicit all-source profile, scheduler/retry queue, job API and UI hand-off |
+| Qualifying calculation | Practice/session laps, stints, compounds and weather inputs | Leakage-free features, baseline/model, full classification, calibrated Top-15/10/3 probabilities and teammate comparison |
+| Page 2 — session re-live | Circle-of-Doom Plotly artifact, optional local centerline, positions/gaps and reduced Race Control state | Integrated dashboard page, point-in-time forecast/event panels, reusable central data cut and cached race-state service |
+| Strategy recommendation | Pit, stint, interval, position, weather and race-state inputs | Versioned algorithm, pit window, alternatives, uncertainty and Calculation Snapshots |
+
+A future “load required data” or “load complete weekend” control must hand a job intent to a separate orchestrator or admin runner. The dashboard process itself remains read-only: it does not call providers, write snapshots, or execute the pipeline, and it only observes job status, curated data, manifests, and artifacts. That job-control service is not implemented.
+
+Qualifying is calculated field-wide, without requiring a driver or team selection first, because positions and `Top-N` probabilities depend on the complete entry list. Team and driver selection is a result filter and comparison view, so changing it must not reload source data or rerun the field-wide calculation.
+
+Strategy output is driver-specific and should require a focus driver, optionally selected through a team. Its Race State still contains all competitors for traffic, gaps, pit exit, undercut, and overcut context. With a cached Race State, switching the focus driver reruns only the small strategy calculation, not ingestion or replay construction.
 
 ## Setup
 
@@ -262,16 +403,28 @@ PYTHONPATH=src python -m f1_pipeline.master_data --season 2026
 Run the complete Hungary F1-Wikidata-Open-Meteo weekend pipeline from existing snapshots when possible:
 
 ```bash
-PYTHONPATH=src python -m f1_pipeline.sources.weekend_weather_pipeline --strict
+PYTHONPATH=src python -m f1_pipeline.sources.weekend_weather_pipeline \
+  --season 2026 \
+  --meeting-key 1291 \
+  --purpose weekend \
+  --target-session-key 11342 \
+  --decision-time 2026-07-26T16:00:00Z \
+  --run-initialized-at 2026-07-26T00:00:00Z \
+  --available-at 2026-07-26T06:00:00Z \
+  --strict
 ```
 
-The default historical acceptance case ingests OpenF1 sessions `11335`, `11336`, `11337`, `11338`, and `11342` for meeting `1291`, Wikidata `Q171356`, and the ECMWF IFS run initialized at `2026-07-26T00:00:00Z`. Its `available_at=2026-07-26T06:00:00Z` is a conservative documented-latency policy, not an observed historical retrieval timestamp. Use `--refresh` only to create new source and manifest versions.
+The historical acceptance case ingests OpenF1 sessions `11335`, `11336`, `11337`, `11338`, and `11342` for meeting `1291`, Wikidata `Q171356`, and the ECMWF IFS run initialized at `2026-07-26T00:00:00Z`. Its `available_at=2026-07-26T06:00:00Z` is a conservative documented-latency policy, not an observed historical retrieval timestamp. Omitting both run arguments deterministically selects the latest 00/06/12/18 UTC cycle whose initialization plus six-hour publication allowance does not exceed `decision_time`. Use `--refresh` only to create new source and manifest versions.
 
 Load only the Hungary race facts while retaining Race `11342` as the forecast target:
 
 ```bash
 PYTHONPATH=src python -m f1_pipeline.sources.weekend_weather_pipeline \
-  --include-session-key 11342 \
+  --season 2026 \
+  --meeting-key 1291 \
+  --purpose replay \
+  --target-session-key 11342 \
+  --decision-time 2026-07-26T16:00:00Z \
   --strict
 ```
 
@@ -279,11 +432,16 @@ Load all discovered practice sessions:
 
 ```bash
 PYTHONPATH=src python -m f1_pipeline.sources.weekend_weather_pipeline \
+  --season 2026 \
+  --meeting-key 1291 \
+  --purpose weekend \
+  --target-session-key 11342 \
+  --decision-time 2026-07-26T16:00:00Z \
   --include-session-type practice \
   --strict
 ```
 
-Repeat `--include-session-key` or `--include-session-type` to select multiple values. When both filters are present, only their intersection is ingested. Invalid, foreign, cancelled, or empty selections are rejected. The existing `--session-key` remains the single forecast target and does not select OpenF1 fact sessions.
+Repeat `--include-session-key` or `--include-session-type` to narrow the sessions allowed by the selected purpose. When both filters are present, only their intersection is ingested. Invalid, foreign, cancelled, future, or empty selections are rejected. `--target-session-key` identifies the replay, qualifying, or race-strategy target and the session whose time horizon the forecast must cover. The older `--session-key` and `--forecast-session-key` spellings remain CLI aliases.
 
 Build and preview the Hungary centerline:
 
@@ -346,4 +504,4 @@ Paid live streaming, private team-data inference, rain radar, complex optimizati
 ## Documentation
 
 - [`docs/projektdokumentation.md`](docs/projektdokumentation.md): German project report, process, verification evidence, problems, decisions, and figures
-- [`docs/sources/`](docs/sources/): concise English source cards
+- Source cards: [OpenF1](docs/sources/openf1.md), [FastF1](docs/sources/fastf1.md), [Open-Meteo](docs/sources/open-meteo.md), and [Wikidata](docs/sources/wikidata.md)
