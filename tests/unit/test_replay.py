@@ -53,6 +53,19 @@ class CircleOfDoomTest(unittest.TestCase):
 
         self.assertEqual(safe["gap_to_leader"].tolist(), ["0", "12.5", "+1 LAP", None])
         self.assertEqual(safe["interval"].tolist(), ["0.0", "2.5", "5.0", None])
+        result_safe = make_parquet_safe(
+            "session_result", frame[["gap_to_leader"]]
+        )
+        self.assertEqual(
+            result_safe["gap_to_leader"].tolist(), ["0", "12.5", "+1 LAP", None]
+        )
+        qualifying_safe = make_parquet_safe(
+            "session_result",
+            pd.DataFrame({"gap_to_leader": [[0.0, 1.2, None]]}),
+        )
+        self.assertEqual(
+            qualifying_safe.iloc[0]["gap_to_leader"], "[0.0,1.2,null]"
+        )
 
     def test_reference_lap_time_allows_missing_pit_out_column(self) -> None:
         laps = pd.DataFrame(
@@ -290,6 +303,35 @@ class CircleOfDoomTest(unittest.TestCase):
         self.assertIn('"speeds":[1,2,5,10]', script)
         self.assertIn("interpolateProgress", script)
         self.assertIn("plotly_sliderchange", script)
+
+    def test_plotly_figure_can_hide_pit_projection(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
+        replay = build_replay(
+            self._datasets(
+                start, cast(pd.Timestamp, start + timedelta(seconds=20))
+            ),
+            focus_driver=2,
+            green_pit_loss=20.0,
+            neutralized_pit_loss=12.0,
+            frame_seconds=10,
+            max_staleness_seconds=15,
+        )
+
+        figure = create_figure(
+            replay,
+            focus_driver=2,
+            focus_acronym="FOC",
+            frame_seconds=10,
+            show_pit_projection=False,
+        )
+
+        self.assertEqual(len(figure.data), 6)
+        self.assertEqual(len(cast(Any, figure.data[4]).x), 0)
+        self.assertEqual(len(cast(Any, figure.data[5]).x), 0)
+        content = figure.to_json().casefold()
+        self.assertNotIn("pit projection", content)
+        self.assertNotIn("immediate stop", content)
+        self.assertNotIn("pit→", content)
 
     @staticmethod
     def _car(number: int, acronym: str, position: int, gap: float) -> CarState:

@@ -60,7 +60,7 @@ SOURCE_TITLE = (
 SOURCE_ANNOTATION = (
     "<b>Why these sources?</b><br>"
     "<b>OpenF1</b> — primary timeline: session, gaps, positions, race control<br>"
-    "<b>FastF1</b> — historical cross-check: laps, tyres, weather, telemetry<br>"
+    "<b>FastF1</b> — historical cross-check: laps, tyres, weather<br>"
     "<b>Open-Meteo</b> — immutable forecasts; not used in this replay yet<br>"
     "<b>Wikidata</b> — validated circuit reference coordinates"
 )
@@ -832,6 +832,7 @@ def _frame_traces(
         focus_driver: int,
         driver_order: tuple[int, ...] | None = None,
         geometry: TrackGeometry | None = None,
+        show_pit_projection: bool = True,
 ) -> tuple[go.Scattergl, go.Scattergl, go.Scatter]:
     track_geometry = geometry or synthetic_track_geometry()
     x: list[float | None] = []
@@ -897,11 +898,21 @@ def _frame_traces(
     )
 
     projection = frame.projection
-    if projection is None:
+    if projection is None or not show_pit_projection:
         projection_trace = go.Scattergl(
-            x=[], y=[], mode="markers", name="Pit projection"
+            x=[],
+            y=[],
+            mode="markers",
+            name="Pit projection" if show_pit_projection else "",
+            showlegend=show_pit_projection,
         )
-        arc_trace = go.Scatter(x=[], y=[], mode="lines", name="Pit loss")
+        arc_trace = go.Scatter(
+            x=[],
+            y=[],
+            mode="lines",
+            name="Pit loss" if show_pit_projection else "",
+            showlegend=show_pit_projection,
+        )
     else:
         projection_x, projection_y = point_at_progress(
             track_geometry.points, projection.projected_progress, offset=0.08
@@ -954,9 +965,15 @@ def _frame_title(
         frame: ReplayFrame,
         focus_acronym: str,
         geometry_label: str = "synthetic circle fallback",
+        show_pit_projection: bool = True,
 ) -> str:
     projection = frame.projection
     clock = frame.date.strftime("%H:%M:%S UTC")
+    if not show_pit_projection:
+        return (
+            f"Race replay · Lap {frame.lap_number} · {clock} · {frame.status}"
+            f"<br><sup>{SOURCE_TITLE}<br>Track geometry: {geometry_label}</sup>"
+        )
     if projection:
         projection_text = (
             f"{focus_acronym}: immediate stop → P{projection.projected_position} "
@@ -1226,6 +1243,7 @@ def create_figure(
         focus_acronym: str,
         frame_seconds: int,
         geometry: TrackGeometry | None = None,
+        show_pit_projection: bool = True,
 ) -> go.Figure:
     """Create the interactive Plotly animation."""
     track_geometry = geometry or synthetic_track_geometry()
@@ -1273,6 +1291,7 @@ def create_figure(
         focus_driver,
         driver_order,
         track_geometry,
+        show_pit_projection,
     )
     figure = go.Figure(data=[track_trace, start_line, halfway_line, *first_traces])
     plotly_frames: list[go.Frame] = []
@@ -1286,6 +1305,7 @@ def create_figure(
             focus_driver,
             driver_order,
             track_geometry,
+            show_pit_projection,
         )
         plotly_frames.append(
             go.Frame(
@@ -1293,7 +1313,14 @@ def create_figure(
                 traces=[3, 4, 5],
                 name=name,
                 layout=go.Layout(
-                    title={"text": _frame_title(frame, focus_acronym, track_geometry.label)}
+                    title={
+                        "text": _frame_title(
+                            frame,
+                            focus_acronym,
+                            track_geometry.label,
+                            show_pit_projection,
+                        )
+                    }
                 ),
             )
         )
@@ -1313,7 +1340,10 @@ def create_figure(
         template="plotly_dark",
         title={
             "text": _frame_title(
-                replay.frames[0], focus_acronym, track_geometry.label
+                replay.frames[0],
+                focus_acronym,
+                track_geometry.label,
+                show_pit_projection,
             ),
             "x": 0.5,
         },
@@ -1326,13 +1356,22 @@ def create_figure(
         yaxis={"visible": False, "range": [-1.35, 1.35]},
         annotations=[
             {
-                "text": (
-                    f"Track = {track_geometry.label}<br>"
-                    "Position = geometric lap progress from OpenF1 x/y/z<br>"
-                    "Gap = OpenF1 gap_to_leader<br>"
-                    f"Pit projection using reference lap {replay.reference_lap_time:.1f}s<br>"
-                    "Diamond = recently stopped<br>"
-                    f"Keyframes every {frame_seconds}s · smoothly interpolated<br><br>{SOURCE_ANNOTATION}"
+                "text": "<br>".join(
+                    [
+                        f"Track = {track_geometry.label}",
+                        "Position = geometric lap progress from OpenF1 x/y/z",
+                        "Gap = OpenF1 gap_to_leader",
+                        *(
+                            [
+                                f"Pit projection using reference lap {replay.reference_lap_time:.1f}s"
+                            ]
+                            if show_pit_projection
+                            else []
+                        ),
+                        "Diamond = recently stopped",
+                        f"Keyframes every {frame_seconds}s · smoothly interpolated",
+                        f"<br>{SOURCE_ANNOTATION}",
+                    ]
                 ),
                 "x": 0.01,
                 "y": 0.01,

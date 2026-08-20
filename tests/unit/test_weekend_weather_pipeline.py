@@ -458,9 +458,19 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             def forecast_loader(*args: object, **kwargs: object) -> tuple[pd.DataFrame, dict[str, object]]:
                 raise OpenMeteoError("forecast unavailable")
 
+            weekend_calls: list[dict[str, object]] = []
+
             def weekend_loader(
                     sessions: list[dict[str, Any]], **kwargs: object
             ) -> tuple[dict[str, object], Path]:
+                weekend_calls.append(
+                    {
+                        "purpose": kwargs["purpose"],
+                        "session_keys": [
+                            session["source_session_key"] for session in sessions
+                        ],
+                    }
+                )
                 path = root / "curated" / "manifests" / "openf1_weekend_test.json"
                 result: dict[str, object] = {
                     "status": "stale",
@@ -475,6 +485,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             first, first_path = run_weekend_weather_pipeline(
                 meeting_key=1291,
                 decision_time="2026-07-26T16:00:00Z",
+                purpose="weekend_complete_v1",
                 output_dir=root / "curated",
                 master_loader=master_loader,
                 reference_loader=reference_loader,
@@ -486,6 +497,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             second, second_path = run_weekend_weather_pipeline(
                 meeting_key=1291,
                 decision_time="2026-07-26T16:00:00Z",
+                purpose="weekend_complete_v1",
                 output_dir=root / "curated",
                 master_loader=master_loader,
                 reference_loader=reference_loader,
@@ -497,6 +509,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             race_only, race_only_path = run_weekend_weather_pipeline(
                 meeting_key=1291,
                 decision_time="2026-07-26T16:00:00Z",
+                purpose="weekend_complete_v1",
                 output_dir=root / "curated",
                 master_loader=master_loader,
                 reference_loader=reference_loader,
@@ -514,6 +527,24 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             self.assertEqual(first["run_id"], second["run_id"])
             self.assertEqual(first["selection"]["resolved_session_keys"], [11338, 11342])
             self.assertEqual(first["context"]["selected_session_count"], 2)
+            self.assertEqual(first["selection"]["purpose"], "weekend_complete_v1")
+            self.assertEqual(
+                weekend_calls,
+                [
+                    {
+                        "purpose": "weekend_complete_v1",
+                        "session_keys": [11338, 11342],
+                    },
+                    {
+                        "purpose": "weekend_complete_v1",
+                        "session_keys": [11338, 11342],
+                    },
+                    {
+                        "purpose": "weekend_complete_v1",
+                        "session_keys": [11342],
+                    },
+                ],
+            )
             self.assertEqual(race_only["selection"]["resolved_session_keys"], [11342])
             self.assertNotEqual(first_path, race_only_path)
             persisted = json.loads(first_path.read_text(encoding="utf-8"))

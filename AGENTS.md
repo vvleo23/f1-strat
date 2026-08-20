@@ -2,14 +2,14 @@
 
 - The main product is an automated Python data pipeline for a selected Formula 1 race weekend using sources such as OpenF1, FastF1, and Open-Meteo.
 - Meeting selection, session discovery, ingestion jobs, validation, immutable snapshots, manifests, and scheduling take priority over models and UI.
-- The binding implementation order is F1/Wikidata/Open-Meteo weekend weather pipeline, complete weekend ingestion and Silver facts, replay leakage removal, Calculation Snapshots, online strategy and pit-window recommendations, then the read-only UI.
+- The binding V1 implementation order is F1/Wikidata/Open-Meteo weekend weather pipeline, complete weekend ingestion and Silver facts, manifest-backed read models and job control, then the read-only season overview and session replay UI. Replay leakage removal, Calculation Snapshots, predictions, and online strategy follow after V1.
 - Historical replay is a pipeline consumer that releases data only up to `decision_time`; calculations, predictions, and dashboards must use the same temporal boundary.
-- Online strategy and pit-window recommendations are MVP outputs. Rain radar is discarded and must not be added as a source, adapter, or UI feature.
+- Qualifying prediction, race prediction, online strategy, and pit-window recommendations are excluded from Pipeline and Dashboard V1. Rain radar is discarded and must not be added as a source, adapter, or UI feature.
 - `README.md` is the Single Source of Truth for the project goal, structure, pipeline, data model, MVP, status, roadmap, setup, and usage.
 - `docs/projektdokumentation.md` is the German project report for process, verification evidence, problems, decisions, research, and figures.
 - `docs/sources/` contains one concise English source card per external source.
 - Do not create additional documentation files unless the requested information cannot fit one of these locations.
-    
+
 # Coding rules
 
 - Keep your code changes minimal and never refactor too much. Minimum viable Product (MVP) is the goal, not perfect code. Refactor only when necessary to implement a new feature or fix a bug.
@@ -35,7 +35,7 @@
 - Support `available`, `partial`, `stale`, and `unavailable` so processing and display can return safe partial results.
 - Features with missing minimum input must return an empty state and a clear error without stopping unrelated functionality.
 - Keep the UI responsive while data loads or is unavailable. All visible UI text, labels, tooltips, status messages, errors, and empty states must be English.
-- Any future dashboard is a small read-only consumer of curated data and artifacts. It must not fetch sources, write snapshots, orchestrate jobs, or train models.
+- The dashboard is a small read-only consumer of curated data and artifacts. It must not fetch sources, write snapshots, orchestrate jobs, or train models; data actions submit intents to the separate job service.
 
 # Your behaviour
 

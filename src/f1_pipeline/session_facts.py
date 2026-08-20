@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,9 @@ FACT_NAMES = {
     "stints": "stint",
     "race_control": "race_control_event",
     "weather": "weather_observation",
+    "session_result": "session_result",
+    "championship_drivers": "driver_championship_standing",
+    "championship_teams": "team_championship_standing",
 }
 LAPPED_PATTERN = re.compile(r"^\+(\d+)\s+LAPS?$", re.IGNORECASE)
 
@@ -44,6 +48,44 @@ def _timestamp(frame: pd.DataFrame, name: str) -> pd.Series:
 def _text(frame: pd.DataFrame, name: str) -> pd.Series:
     values = _column(frame, name)
     return values.map(lambda value: None if pd.isna(value) else str(value))
+
+
+def _raw_text(frame: pd.DataFrame, name: str) -> pd.Series:
+    def serialize(value: Any) -> str | None:
+        if value is None:
+            return None
+        if not pd.api.types.is_scalar(value):
+            if hasattr(value, "tolist"):
+                value = value.tolist()
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        if pd.isna(value):
+            return None
+        return str(value)
+
+    return _column(frame, name).map(serialize)
+
+
+def _boolean(frame: pd.DataFrame, name: str) -> pd.Series:
+    def parse(value: Any) -> bool | None:
+        if value is None or pd.isna(value):
+            return None
+        if isinstance(value, bool):
+            return value
+        normalized = str(value).strip().casefold()
+        if normalized in {"true", "1"}:
+            return True
+        if normalized in {"false", "0"}:
+            return False
+        return None
+
+    return _column(frame, name).map(parse).astype("boolean")
+
+
+def _team_id(value: Any) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value).strip().casefold()).strip("-")
+    return f"openf1:team:{slug}" if slug else None
 
 
 def _identifier(kind: str, values: list[Any]) -> str:
@@ -194,6 +236,70 @@ def normalize_session_fact(
             result.drop(columns=["fact_id", "event_time", "available_at", "availability_basis", "source_record_key"]),
             fact_name=fact_name,
             source_keys=["session_entry_id"],
+            event_time=pd.Series(retrieved_at, index=result.index),
+            availability_basis="observed_retrieval",
+        )
+
+    if endpoint == "session_result":
+        result["meeting_id"] = _numeric(frame, "meeting_key").astype("Int64").map(
+            lambda value: None if pd.isna(value) else f"openf1:meeting:{int(value)}"
+        )
+        result["position"] = _numeric(frame, "position").astype("Int64")
+        result["number_of_laps"] = _numeric(frame, "number_of_laps").astype("Int64")
+        result["points"] = _numeric(frame, "points")
+        result["dnf"] = _boolean(frame, "dnf")
+        result["dns"] = _boolean(frame, "dns")
+        result["dsq"] = _boolean(frame, "dsq")
+        result["duration_raw"] = _raw_text(frame, "duration")
+        result["duration_seconds"] = _numeric(frame, "duration")
+        gap_raw = _text(frame, "gap_to_leader")
+        result["gap_to_leader_raw"] = gap_raw
+        result["gap_to_leader_seconds"] = pd.to_numeric(gap_raw, errors="coerce")
+        result["laps_behind"] = gap_raw.map(
+            lambda value: (
+                int(match.group(1))
+                if isinstance(value, str) and (match := LAPPED_PATTERN.fullmatch(value.strip()))
+                else None
+            )
+        ).astype("Int64")
+        return fact_name, _finalize(
+            result,
+            fact_name=fact_name,
+            source_keys=["session_id", "driver_number"],
+            event_time=pd.Series(retrieved_at, index=result.index),
+            availability_basis="observed_retrieval",
+        )
+
+    if endpoint == "championship_drivers":
+        result["meeting_id"] = _numeric(frame, "meeting_key").astype("Int64").map(
+            lambda value: None if pd.isna(value) else f"openf1:meeting:{int(value)}"
+        )
+        result["position_start"] = _numeric(frame, "position_start").astype("Int64")
+        result["position_current"] = _numeric(frame, "position_current").astype("Int64")
+        result["points_start"] = _numeric(frame, "points_start")
+        result["points_current"] = _numeric(frame, "points_current")
+        return fact_name, _finalize(
+            result,
+            fact_name=fact_name,
+            source_keys=["session_id", "driver_number"],
+            event_time=pd.Series(retrieved_at, index=result.index),
+            availability_basis="observed_retrieval",
+        )
+
+    if endpoint == "championship_teams":
+        result["meeting_id"] = _numeric(frame, "meeting_key").astype("Int64").map(
+            lambda value: None if pd.isna(value) else f"openf1:meeting:{int(value)}"
+        )
+        result["team_name"] = _text(frame, "team_name")
+        result["team_id"] = result["team_name"].map(_team_id)
+        result["position_start"] = _numeric(frame, "position_start").astype("Int64")
+        result["position_current"] = _numeric(frame, "position_current").astype("Int64")
+        result["points_start"] = _numeric(frame, "points_start")
+        result["points_current"] = _numeric(frame, "points_current")
+        return fact_name, _finalize(
+            result,
+            fact_name=fact_name,
+            source_keys=["session_id", "team_name"],
             event_time=pd.Series(retrieved_at, index=result.index),
             availability_basis="observed_retrieval",
         )

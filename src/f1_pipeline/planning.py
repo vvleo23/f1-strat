@@ -8,7 +8,13 @@ import pandas as pd
 from f1_pipeline.sources.open_meteo import utc_timestamp
 from f1_pipeline.sources.openf1_weekend import OpenF1WeekendError, normalize_session_type
 
-PURPOSES = ("weekend", "replay", "qualifying_prediction", "race_strategy")
+PURPOSES = (
+    "weekend",
+    "weekend_complete_v1",
+    "replay",
+    "qualifying_prediction",
+    "race_strategy",
+)
 
 
 class SessionPlanningError(RuntimeError):

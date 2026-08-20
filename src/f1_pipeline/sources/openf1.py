@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any, Protocol
@@ -106,14 +107,24 @@ def location_driver_cache_path(session_key: int, driver_number: int) -> Path:
     return RAW_DATA_DIR / f"openf1_{session_key}_location_driver_{driver_number}.parquet"
 
 
+def _parquet_safe_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not pd.api.types.is_scalar(value):
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return None if pd.isna(value) else str(value)
+
+
 def make_parquet_safe(endpoint: str, frame: pd.DataFrame) -> pd.DataFrame:
     safe = frame.copy()
     if endpoint == "intervals":
         for column in ("gap_to_leader", "interval"):
             if column in safe.columns:
-                safe[column] = safe[column].map(
-                    lambda value: None if pd.isna(value) else str(value)
-                )
+                safe[column] = safe[column].map(_parquet_safe_text)
+    if endpoint == "session_result" and "gap_to_leader" in safe.columns:
+        safe["gap_to_leader"] = safe["gap_to_leader"].map(_parquet_safe_text)
     return safe
 
 

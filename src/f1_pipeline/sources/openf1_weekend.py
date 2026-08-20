@@ -33,6 +33,9 @@ ENDPOINTS = (
     "race_control",
     "weather",
     "location",
+    "session_result",
+    "championship_drivers",
+    "championship_teams",
 )
 REQUIRED_BY_SESSION_TYPE = {
     "practice": frozenset({"drivers", "laps", "stints", "weather"}),
@@ -56,10 +59,14 @@ REQUIRED_BY_SESSION_TYPE = {
 }
 OPTIONAL_BY_SESSION_TYPE = {
     "practice": frozenset({"position", "pit", "race_control"}),
-    "qualifying": frozenset({"pit", "race_control"}),
-    "sprint_qualifying": frozenset({"pit", "race_control"}),
-    "sprint": frozenset({"pit"}),
-    "race": frozenset(),
+    "qualifying": frozenset({"pit", "race_control", "session_result"}),
+    "sprint_qualifying": frozenset({"pit", "race_control", "session_result"}),
+    "sprint": frozenset(
+        {"pit", "session_result", "championship_drivers", "championship_teams"}
+    ),
+    "race": frozenset(
+        {"session_result", "championship_drivers", "championship_teams"}
+    ),
 }
 ALLOW_EMPTY = frozenset({"intervals", "pit", "race_control"})
 REQUIRED_COLUMNS = {
@@ -73,6 +80,21 @@ REQUIRED_COLUMNS = {
     "race_control": {"session_key", "date", "message"},
     "weather": {"session_key", "date"},
     "location": {"session_key", "driver_number", "date", "x", "y", "z"},
+    "session_result": {"session_key", "meeting_key", "driver_number", "position"},
+    "championship_drivers": {
+        "session_key",
+        "meeting_key",
+        "driver_number",
+        "position_current",
+        "points_current",
+    },
+    "championship_teams": {
+        "session_key",
+        "meeting_key",
+        "team_name",
+        "position_current",
+        "points_current",
+    },
 }
 KEY_COLUMNS = {
     "sessions": ("session_key",),
@@ -85,6 +107,9 @@ KEY_COLUMNS = {
     "race_control": ("session_key", "date", "message"),
     "weather": ("session_key", "date"),
     "location": ("session_key", "driver_number", "date"),
+    "session_result": ("session_key", "driver_number"),
+    "championship_drivers": ("session_key", "driver_number"),
+    "championship_teams": ("session_key", "team_name"),
 }
 DATETIME_COLUMNS = {
     "sessions": ("date_start",),
@@ -97,6 +122,9 @@ DATETIME_COLUMNS = {
     "race_control": ("date",),
     "weather": ("date",),
     "location": ("date",),
+    "session_result": (),
+    "championship_drivers": (),
+    "championship_teams": (),
 }
 NUMERIC_COLUMNS = {
     "sessions": ("session_key", "meeting_key"),
@@ -125,6 +153,31 @@ NUMERIC_COLUMNS = {
         "wind_direction",
     ),
     "location": ("session_key", "driver_number", "x", "y", "z"),
+    "session_result": (
+        "session_key",
+        "meeting_key",
+        "driver_number",
+        "position",
+        "number_of_laps",
+        "points",
+    ),
+    "championship_drivers": (
+        "session_key",
+        "meeting_key",
+        "driver_number",
+        "position_start",
+        "position_current",
+        "points_start",
+        "points_current",
+    ),
+    "championship_teams": (
+        "session_key",
+        "meeting_key",
+        "position_start",
+        "position_current",
+        "points_start",
+        "points_current",
+    ),
 }
 REQUIRED_NON_NULL = {
     "sessions": ("session_key", "meeting_key", "session_name", "date_start"),
@@ -137,6 +190,21 @@ REQUIRED_NON_NULL = {
     "race_control": ("session_key", "date", "message"),
     "weather": ("session_key", "date"),
     "location": ("session_key", "driver_number", "date", "x", "y", "z"),
+    "session_result": ("session_key", "meeting_key", "driver_number"),
+    "championship_drivers": (
+        "session_key",
+        "meeting_key",
+        "driver_number",
+        "position_current",
+        "points_current",
+    ),
+    "championship_teams": (
+        "session_key",
+        "meeting_key",
+        "team_name",
+        "position_current",
+        "points_current",
+    ),
 }
 
 
@@ -196,6 +264,10 @@ def plan_weekend_sessions(
         optional = OPTIONAL_BY_SESSION_TYPE[normalized_type]
         if purpose == "replay":
             required = required | {"sessions", "location"}
+        elif purpose == "weekend_complete_v1":
+            required = required | {"sessions"}
+            if normalized_type in {"sprint", "race"}:
+                required = required | {"location"}
         skipped = frozenset(ENDPOINTS).difference(required | optional)
         plans.append(
             {
