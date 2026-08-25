@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
+import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 
 from f1_pipeline.data_validation import DataValidationError, validate_frame
-from f1_pipeline.persistence import atomic_parquet
-from f1_pipeline.settings import CURATED_DATA_DIR, RAW_DATA_DIR
+from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
+from f1_pipeline.settings import CURATED_DATA_DIR, PROJECT_ROOT, RAW_DATA_DIR
 
 GEOMETRY_COLUMNS = [
     "geometry_id",
@@ -45,6 +48,24 @@ MAX_CANDIDATE_LENGTH_RATIO = 1.25
 MAX_CANDIDATE_CLOSURE_RATIO = 0.08
 SMOOTHING_WINDOW = 7
 SMOOTHING_PASSES = 2
+
+
+def geometry_table_path(season: int, curated_dir: Path = CURATED_DATA_DIR) -> Path:
+    if season < 1950:
+        raise ValueError("Season must be 1950 or later.")
+    return curated_dir / "dimensions" / f"season={season}" / "circuit_geometry.parquet"
+
+
+def _relative_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(PROJECT_ROOT.resolve()))
+    except ValueError:
+        return str(path)
+
+
+def _stored_path(value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
 class TrackGeometryError(RuntimeError):
@@ -229,7 +250,7 @@ def _candidate_paths(location: pd.DataFrame, laps: pd.DataFrame) -> list[dict[st
         subset=["location_at", "driver_number", "x", "y", "z"]
     )
     location_by_driver = {
-        int(driver): frame.sort_values("location_at")
+        int(cast(Any, driver)): frame.sort_values("location_at")
         for driver, frame in locations.groupby("driver_number")
     }
 
@@ -256,7 +277,7 @@ def _candidate_paths(location: pd.DataFrame, laps: pd.DataFrame) -> list[dict[st
         next_lap_start = getattr(row, "next_lap_started_at")
         if pd.isna(next_lap_start):
             continue
-        driver = int(row.driver_number)
+        driver = int(cast(Any, row.driver_number))
         driver_locations = location_by_driver.get(driver)
         if driver_locations is None:
             continue
@@ -276,7 +297,7 @@ def _candidate_paths(location: pd.DataFrame, laps: pd.DataFrame) -> list[dict[st
         candidates.append(
             {
                 "driver_number": driver,
-                "lap_number": int(row.lap_number),
+                "lap_number": int(cast(Any, row.lap_number)),
                 "path": path,
                 "sample_count": sample_count,
                 "path_length": path_length,
@@ -496,27 +517,42 @@ def _validate_geometry_frame(frame: pd.DataFrame) -> None:
 def write_geometry_record(
         record: dict[str, Any], path: Path = GEOMETRY_PATH
 ) -> Path:
-    existing = pd.DataFrame(columns=GEOMETRY_COLUMNS)
-    if path.exists():
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(f"{path.suffix}.lock")
+    deadline = time.monotonic() + 30
+    descriptor: int | None = None
+    while descriptor is None:
         try:
-            existing = pd.read_parquet(path)
-        except (OSError, ValueError) as exc:
-            raise TrackGeometryError(f"Could not read geometry dimension: {exc}") from exc
-    records = existing.to_dict(orient="records")
-    records = [
-        item
-        for item in records
-        if item.get("geometry_id") != record.get("geometry_id")
-           and item.get("source_record_key") != record.get("source_record_key")
-    ]
-    records.append(record)
-    frame = pd.DataFrame(records)
-    for column in GEOMETRY_COLUMNS:
-        if column not in frame.columns:
-            frame[column] = None
-    frame = frame[GEOMETRY_COLUMNS]
-    _validate_geometry_frame(frame)
-    atomic_parquet(frame, path)
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise TrackGeometryError("Geometry dimension is locked by another pipeline run.")
+            time.sleep(0.05)
+    os.close(descriptor)
+    try:
+        existing = pd.DataFrame(columns=GEOMETRY_COLUMNS)
+        if path.exists():
+            try:
+                existing = pd.read_parquet(path)
+            except (OSError, ValueError) as exc:
+                raise TrackGeometryError(f"Could not read geometry dimension: {exc}") from exc
+        records = existing.to_dict(orient="records")
+        records = [
+            item
+            for item in records
+            if item.get("geometry_id") != record.get("geometry_id")
+               and item.get("source_record_key") != record.get("source_record_key")
+        ]
+        records.append(record)
+        frame = pd.DataFrame(records)
+        for column in GEOMETRY_COLUMNS:
+            if column not in frame.columns:
+                frame[column] = None
+        frame = frame[GEOMETRY_COLUMNS]
+        _validate_geometry_frame(frame)
+        atomic_parquet(frame, path)
+    finally:
+        lock_path.unlink(missing_ok=True)
     return path
 
 
@@ -562,25 +598,19 @@ def _track_geometry_from_record(record: dict[str, Any]) -> TrackGeometry:
     )
 
 
-def load_track_geometry(
+def _selected_geometry_record(
+        frame: pd.DataFrame,
         session_key: int,
-        *,
-        meeting_key: int | None = None,
-        circuit_id: str | None = None,
-        path: Path = GEOMETRY_PATH,
-) -> TrackGeometry | None:
-    if not path.exists():
-        return None
-    try:
-        frame = pd.read_parquet(path)
-    except (OSError, ValueError) as exc:
-        raise TrackGeometryError(f"Could not read geometry dimension: {exc}") from exc
+        meeting_key: int | None,
+        circuit_id: str | None,
+) -> dict[str, Any] | None:
     if frame.empty:
         return None
     _validate_geometry_frame(frame)
-    records = frame.to_dict(orient="records")
     exact: list[dict[str, Any]] = []
     weekend: list[dict[str, Any]] = []
+    circuit: list[dict[str, Any]] = []
+    records = cast(list[dict[str, Any]], frame.to_dict(orient="records"))
     for record in records:
         if circuit_id is not None and record.get("circuit_id") != circuit_id:
             continue
@@ -589,10 +619,61 @@ def load_track_geometry(
             exact.append(record)
         elif meeting_key is not None and int(data.get("source_meeting_key", -1)) == meeting_key:
             weekend.append(record)
-    selected = exact or weekend
+        elif circuit_id is not None:
+            circuit.append(record)
+    selected = exact or weekend or circuit
     if not selected:
         return None
-    return _track_geometry_from_record(selected[-1])
+
+    def order(record: dict[str, Any]) -> tuple[pd.Timestamp, str]:
+        raw_timestamp = record.get("valid_from_utc")
+        if pd.isna(raw_timestamp):
+            raw_timestamp = record.get("ingested_at")
+        timestamp = cast(
+            pd.Timestamp,
+            pd.to_datetime(
+                str(raw_timestamp),
+                utc=True,
+                errors="coerce",
+            ),
+        )
+        if pd.isna(timestamp):
+            timestamp = pd.Timestamp.min.tz_localize("UTC")
+        return timestamp, str(record.get("geometry_id", ""))
+
+    return max(selected, key=order)
+
+
+def load_track_geometry(
+        session_key: int,
+        *,
+        meeting_key: int | None = None,
+        circuit_id: str | None = None,
+        season: int | None = None,
+        path: Path | None = None,
+        curated_dir: Path = CURATED_DATA_DIR,
+) -> TrackGeometry | None:
+    paths = [path] if path is not None else [
+        geometry_table_path(season, curated_dir) if season is not None else GEOMETRY_PATH
+    ]
+    if path is None and season == 2026 and paths[0] != GEOMETRY_PATH:
+        paths.append(GEOMETRY_PATH)
+    for candidate_path in paths:
+        if not candidate_path.exists():
+            continue
+        try:
+            frame = pd.read_parquet(candidate_path)
+        except (OSError, ValueError) as exc:
+            raise TrackGeometryError(f"Could not read geometry dimension: {exc}") from exc
+        selected = _selected_geometry_record(
+            frame,
+            session_key,
+            meeting_key,
+            circuit_id,
+        )
+        if selected is not None:
+            return _track_geometry_from_record(selected)
+    return None
 
 
 def _session_context(session_key: int) -> tuple[int, int, str]:
@@ -608,13 +689,134 @@ def _session_context(session_key: int) -> tuple[int, int, str]:
     return meeting_key, circuit_key, f"openf1:circuit:{circuit_key}"
 
 
+def _refresh_master_geometry_lineage(
+        season: int,
+        output_path: Path,
+        curated_dir: Path,
+) -> None:
+    manifest_path = curated_dir / "manifests" / f"master_data_{season}.json"
+    if not manifest_path.exists():
+        return
+    try:
+        with manifest_path.open(encoding="utf-8") as stream:
+            manifest = json.load(stream)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TrackGeometryError(f"Could not update master geometry lineage: {exc}") from exc
+    tables = manifest.get("tables")
+    if not isinstance(tables, dict):
+        raise TrackGeometryError("Master manifest has no valid table lineage.")
+    tables["circuit_geometry"] = {
+        "path": _relative_path(output_path),
+        "row_count": len(pd.read_parquet(output_path)),
+        "sha256": sha256(output_path),
+    }
+    atomic_json(manifest, manifest_path)
+
+
+def build_manifest_geometry(
+        session_manifest: dict[str, Any],
+        *,
+        season: int,
+        meeting_key: int,
+        circuit_id: str,
+        curated_dir: Path = CURATED_DATA_DIR,
+) -> tuple[dict[str, Any], Path]:
+    try:
+        session_key = int(session_manifest["session_key"])
+        endpoints = session_manifest["endpoints"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise TrackGeometryError("Session manifest has no valid geometry context.") from exc
+    if not isinstance(endpoints, dict):
+        raise TrackGeometryError("Session manifest endpoints are invalid.")
+    inputs: dict[str, dict[str, Any]] = {}
+    for name in ("sessions", "laps", "location"):
+        endpoint = endpoints.get(name)
+        if not isinstance(endpoint, dict) or endpoint.get("status") not in {
+            "available",
+            "stale",
+        }:
+            raise TrackGeometryError(f"Session manifest has no usable {name} endpoint.")
+        raw_path_value = endpoint.get("raw_path")
+        raw_hash = endpoint.get("raw_sha256")
+        if not isinstance(raw_path_value, str) or not isinstance(raw_hash, str):
+            raise TrackGeometryError(f"Session manifest {name} lineage is incomplete.")
+        raw_path = _stored_path(raw_path_value)
+        if not raw_path.is_file() or sha256(raw_path) != raw_hash:
+            raise TrackGeometryError(f"Session manifest {name} snapshot failed hash validation.")
+        inputs[name] = {
+            "raw_path": _relative_path(raw_path),
+            "raw_sha256": raw_hash,
+            "retrieved_at": endpoint.get("retrieved_at"),
+        }
+    laps = pd.read_parquet(_stored_path(inputs["laps"]["raw_path"]))
+    location = pd.read_parquet(_stored_path(inputs["location"]["raw_path"]))
+    retrieved_times = pd.to_datetime(
+        [value["retrieved_at"] for value in inputs.values()],
+        utc=True,
+        errors="coerce",
+        format="mixed",
+    )
+    valid_times = retrieved_times[~pd.isna(retrieved_times)]
+    ingested_at = max(valid_times) if len(valid_times) else pd.Timestamp(datetime.now(timezone.utc))
+    record = build_geometry_record(
+        location,
+        laps,
+        session_key=session_key,
+        meeting_key=meeting_key,
+        circuit_id=circuit_id,
+        ingested_at=ingested_at,
+    )
+    output_path = geometry_table_path(season, curated_dir)
+    write_geometry_record(record, output_path)
+    _refresh_master_geometry_lineage(season, output_path, curated_dir)
+    quality = _record_data(record)["quality"]
+    result = {
+        "status": quality["status"],
+        "season": season,
+        "session_key": session_key,
+        "meeting_key": meeting_key,
+        "circuit_id": circuit_id,
+        "quality": quality,
+        "inputs": inputs,
+        "curated_path": _relative_path(output_path),
+        "curated_sha256": sha256(output_path),
+        "session_manifest_path": session_manifest.get("manifest_path"),
+        "session_manifest_sha256": session_manifest.get("manifest_sha256"),
+    }
+    identity = json.dumps(
+        {
+            "schema_version": 1,
+            "season": season,
+            "session_key": session_key,
+            "meeting_key": meeting_key,
+            "circuit_id": circuit_id,
+            "inputs": inputs,
+            "curated_sha256": result["curated_sha256"],
+        },
+        sort_keys=True,
+    )
+    manifest_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    manifest_path = (
+            curated_dir
+            / "manifests"
+            / "geometries"
+            / f"geometry_{session_key}_{manifest_id}.json"
+    )
+    if not manifest_path.exists():
+        atomic_json({"schema_version": 1, **result}, manifest_path)
+    result["manifest_path"] = _relative_path(manifest_path)
+    result["manifest_sha256"] = sha256(manifest_path)
+    return result, manifest_path
+
+
 def build_session_geometry(
         session_key: int,
         *,
+        season: int = 2026,
         sample_laps: int = DEFAULT_SAMPLE_LAPS,
         point_count: int = DEFAULT_POINT_COUNT,
         orientation_lap: int = DEFAULT_ORIENTATION_LAP,
-        path: Path = GEOMETRY_PATH,
+        path: Path | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     laps_path = RAW_DATA_DIR / f"openf1_{session_key}_laps.parquet"
     location_path = RAW_DATA_DIR / f"openf1_{session_key}_location.parquet"
@@ -633,7 +835,7 @@ def build_session_geometry(
         point_count=point_count,
         orientation_lap=orientation_lap,
     )
-    output = write_geometry_record(record, path)
+    output = write_geometry_record(record, path or geometry_table_path(season))
     data = _record_data(record)
     return output, data["quality"]
 
@@ -643,14 +845,16 @@ def main(argv: list[str] | None = None) -> int:
         description="Build reusable local circuit geometry from OpenF1 location data."
     )
     parser.add_argument("--session-key", type=int, required=True)
+    parser.add_argument("--season", type=int, default=2026)
     parser.add_argument("--sample-laps", type=int, default=DEFAULT_SAMPLE_LAPS)
     parser.add_argument("--point-count", type=int, default=DEFAULT_POINT_COUNT)
     parser.add_argument("--orientation-lap", type=int, default=DEFAULT_ORIENTATION_LAP)
-    parser.add_argument("--output", type=Path, default=GEOMETRY_PATH)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
         output, quality = build_session_geometry(
             args.session_key,
+            season=args.season,
             sample_laps=args.sample_laps,
             point_count=args.point_count,
             orientation_lap=args.orientation_lap,

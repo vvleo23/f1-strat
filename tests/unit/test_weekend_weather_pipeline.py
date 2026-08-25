@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -25,7 +25,9 @@ from f1_pipeline.sources.weekend_weather_pipeline import (
 )
 from f1_pipeline.sources.wikidata import (
     CircuitReference,
+    WikidataClient,
     WikidataError,
+    WikidataProvider,
     discover_circuit_candidates,
     load_reviewed_circuits,
     normalize_circuit_reference,
@@ -105,7 +107,13 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                     reviewed_circuits=mappings,
                 )
 
-            class CandidateClient:
+            class CandidateClient(WikidataClient):
+                def __init__(self) -> None:
+                    pass
+
+                def get_entity(self, entity_id: str) -> dict[str, Any]:
+                    raise AssertionError("Candidate discovery must not load entities.")
+
                 def search_entities(self, query: str) -> dict[str, Any]:
                     return {
                         "search": [
@@ -121,7 +129,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                 999,
                 "Example Circuit",
                 location="Exampleland",
-                client=CandidateClient(),
+                client=cast(WikidataProvider, CandidateClient()),
                 retrieved_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
                 mapping_path=mapping_path,
                 raw_dir=Path(temporary) / "raw",
@@ -519,9 +527,10 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             )
 
             self.assertEqual(first["status"], "partial")
-            self.assertEqual(first["schema_version"], 5)
+            self.assertEqual(first["schema_version"], 6)
             self.assertEqual(first["jobs"]["openf1"]["status"], "stale")
             self.assertEqual(first["jobs"]["openf1_weekend_facts"]["status"], "stale")
+            self.assertEqual(first["jobs"]["track_geometry"]["status"], "unavailable")
             self.assertEqual(first["jobs"]["open_meteo"]["status"], "unavailable")
             self.assertEqual(first_path, second_path)
             self.assertEqual(first["run_id"], second["run_id"])

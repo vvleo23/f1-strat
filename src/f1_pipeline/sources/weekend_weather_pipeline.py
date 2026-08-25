@@ -5,10 +5,14 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, cast
 
 import pandas as pd
 
+from f1_pipeline.geometry import (
+    TrackGeometryError,
+    build_manifest_geometry,
+)
 from f1_pipeline.master_data import MasterDataError, load_master_data, master_table_path
 from f1_pipeline.planning import (
     PURPOSES,
@@ -31,15 +35,16 @@ from f1_pipeline.sources.openf1_weekend import (
     normalize_session_type,
 )
 from f1_pipeline.sources.wikidata import (
+    CircuitResolutionError,
     CircuitReference,
     MissingCircuitMappingError,
     WikidataError,
     discover_circuit_candidates,
-    load_circuit_reference,
+    resolve_circuit_reference,
 )
 
 DEFAULT_SEASON = 2026
-MANIFEST_SCHEMA_VERSION = 5
+MANIFEST_SCHEMA_VERSION = 6
 
 
 class WeekendWeatherPipelineError(RuntimeError):
@@ -50,6 +55,7 @@ MasterLoader = Callable[[int, bool], dict[str, Path]]
 ReferenceLoader = Callable[..., tuple[CircuitReference, dict[str, Any]]]
 ForecastLoader = Callable[..., tuple[pd.DataFrame, dict[str, Any]]]
 WeekendLoader = Callable[..., tuple[dict[str, Any], Path]]
+GeometryBuilder = Callable[..., tuple[dict[str, Any], Path]]
 
 
 def _relative(path: Path) -> str:
@@ -65,6 +71,7 @@ def _load_master_outputs(
         client: OpenF1Client | None = None,
 ) -> dict[str, Path]:
     outputs = {
+        "country": master_table_path("country", season),
         "meeting": master_table_path("meeting", season),
         "session": master_table_path("session", season),
         "circuit": master_table_path("circuit", season),
@@ -75,6 +82,7 @@ def _load_master_outputs(
     legacy_dimensions = CURATED_DATA_DIR / "dimensions"
     legacy = {
         **outputs,
+        "country": legacy_dimensions / "country.parquet",
         "meeting": legacy_dimensions / "meeting.parquet",
         "session": legacy_dimensions / "session.parquet",
         "circuit": legacy_dimensions / "circuit.parquet",
@@ -98,6 +106,14 @@ def _selected_meeting_context(outputs: dict[str, Path], meeting_key: int) -> dic
     if len(circuit_rows) != 1:
         raise WeekendWeatherPipelineError(f"Circuit {circuit_id} was not found uniquely.")
     circuit = circuit_rows.iloc[0]
+    country_name = None
+    country_path = outputs.get("country")
+    country_id = circuit.get("country_id")
+    if country_path is not None and country_path.exists() and pd.notna(country_id):
+        countries = pd.read_parquet(country_path)
+        country_rows = countries[countries["country_id"].eq(str(country_id))]
+        if len(country_rows) == 1 and pd.notna(country_rows.iloc[0].get("country_name")):
+            country_name = str(country_rows.iloc[0]["country_name"])
     source_circuit_key = circuit["source_circuit_key"]
     if pd.isna(source_circuit_key):
         raise WeekendWeatherPipelineError(f"Circuit {circuit_id} has no OpenF1 circuit key.")
@@ -138,6 +154,7 @@ def _selected_meeting_context(outputs: dict[str, Path], meeting_key: int) -> dic
         "circuit_location": (
             str(circuit.get("location")) if pd.notna(circuit.get("location")) else None
         ),
+        "circuit_country": country_name,
         "source_circuit_key": int(source_circuit_key),
         "session_count": len(weekend_sessions),
         "sessions": session_records,
@@ -235,7 +252,7 @@ def _enrich_circuit(
 ) -> None:
     circuits = pd.read_parquet(path)
     mask = circuits["source_circuit_key"].eq(reference.source_circuit_key)
-    if int(mask.sum()) != 1:
+    if len(circuits.loc[mask]) != 1:
         raise WeekendWeatherPipelineError(
             f"Circuit key {reference.source_circuit_key} was not found uniquely in Silver."
         )
@@ -257,8 +274,9 @@ def _enrich_circuit(
         enriched.loc[mask, column] = value
     if not enriched.equals(circuits):
         atomic_parquet(enriched, path)
-    if legacy_path is not None and legacy_path != path:
-        atomic_parquet(enriched, legacy_path)
+    if legacy_path is not None:
+        if legacy_path != path:
+            atomic_parquet(enriched, legacy_path)
 
 
 def _overall_status(jobs: dict[str, dict[str, Any]]) -> str:
@@ -289,6 +307,7 @@ def run_weekend_weather_pipeline(
         reference_loader: ReferenceLoader | None = None,
         forecast_loader: ForecastLoader | None = None,
         weekend_loader: WeekendLoader | None = None,
+        geometry_builder: GeometryBuilder = build_manifest_geometry,
 ) -> tuple[dict[str, Any], Path]:
     started_at = datetime.now(timezone.utc)
     cut_time = utc_timestamp(decision_time, "decision_time")
@@ -298,6 +317,7 @@ def run_weekend_weather_pipeline(
     context: dict[str, Any] | None = None
     reference: CircuitReference | None = None
     outputs: dict[str, Path] = {}
+    weekend_result: dict[str, Any] | None = None
     shared_openf1 = (
         OpenF1Client()
         if master_loader is None or weekend_loader is None
@@ -310,7 +330,7 @@ def run_weekend_weather_pipeline(
             shared_openf1,
         )
     )
-    load_reference = reference_loader or load_circuit_reference
+    load_reference = reference_loader or resolve_circuit_reference
     load_weather = forecast_loader or load_forecast
     load_weekend = weekend_loader or (
         lambda sessions, **kwargs: ingest_weekend(
@@ -341,10 +361,14 @@ def run_weekend_weather_pipeline(
         resolved_run_initialized_at = selected_run.isoformat()
         resolved_available_at = selected_availability.isoformat()
     else:
+        assert run_initialized_at is not None
+        assert available_at is not None
         resolved_run_initialized_at = utc_timestamp(
-            run_initialized_at, "run_initialized_at"
+            cast(str, run_initialized_at), "run_initialized_at"
         ).isoformat()
-        resolved_available_at = utc_timestamp(available_at, "available_at").isoformat()
+        resolved_available_at = utc_timestamp(
+            cast(str, available_at), "available_at"
+        ).isoformat()
 
     try:
         outputs = load_master(season, refresh)
@@ -411,24 +435,74 @@ def run_weekend_weather_pipeline(
         }
     else:
         try:
-            weekend_result, weekend_path = load_weekend(
+            loaded_weekend, weekend_path = load_weekend(
                 context["sessions"],
                 meeting_key=meeting_key,
                 purpose=context["purpose"],
                 refresh=refresh,
                 curated_dir=output_dir,
             )
+            weekend_result = loaded_weekend
             jobs["openf1_weekend_facts"] = {
-                "status": weekend_result["status"],
+                "status": loaded_weekend["status"],
                 "manifest_path": _relative(weekend_path),
                 "manifest_sha256": sha256(weekend_path),
-                "sessions": weekend_result["sessions"],
+                "sessions": loaded_weekend["sessions"],
             }
         except (OpenF1WeekendError, OSError, ValueError, KeyError) as exc:
             jobs["openf1_weekend_facts"] = {
                 "status": "unavailable",
                 "error": str(exc),
             }
+
+    geometry_results: list[dict[str, Any]] = []
+    geometry_errors: list[dict[str, Any]] = []
+    if context is not None and weekend_result is not None:
+        for session_manifest in weekend_result.get("sessions", []):
+            if not isinstance(session_manifest, dict):
+                continue
+            endpoints = session_manifest.get("endpoints")
+            if not isinstance(endpoints, dict) or not all(
+                    name in endpoints for name in ("sessions", "laps", "location")
+            ):
+                continue
+            try:
+                geometry_result, _ = geometry_builder(
+                    session_manifest,
+                    season=season,
+                    meeting_key=meeting_key,
+                    circuit_id=context["circuit_id"],
+                    curated_dir=output_dir,
+                )
+                geometry_results.append(geometry_result)
+            except (TrackGeometryError, OSError, ValueError, KeyError, TypeError) as exc:
+                geometry_errors.append(
+                    {
+                        "session_key": session_manifest.get("session_key"),
+                        "error": str(exc),
+                    }
+                )
+    if geometry_results:
+        statuses = {result["status"] for result in geometry_results}
+        jobs["track_geometry"] = {
+            "status": (
+                "partial"
+                if geometry_errors or "partial" in statuses
+                else "available"
+            ),
+            "geometries": geometry_results,
+            "errors": geometry_errors,
+            "manifest_sha256": geometry_results[-1].get("manifest_sha256"),
+            "curated_sha256": geometry_results[-1].get("curated_sha256"),
+        }
+    else:
+        jobs["track_geometry"] = {
+            "status": "unavailable",
+            "error": "No session produced a usable OpenF1 track geometry.",
+            "errors": geometry_errors,
+        }
+    if "openf1" in jobs and outputs.get("manifest", Path()).is_file():
+        jobs["openf1"]["manifest_sha256"] = sha256(outputs["manifest"])
 
     if context is None:
         jobs["wikidata"] = {
@@ -437,9 +511,18 @@ def run_weekend_weather_pipeline(
         }
     else:
         try:
-            loaded_reference, result = load_reference(
-                context["source_circuit_key"], refresh=refresh
-            )
+            if reference_loader is None:
+                loaded_reference, result = load_reference(
+                    context["source_circuit_key"],
+                    context["circuit_name"],
+                    context["circuit_country"] or "",
+                    location=context["circuit_location"],
+                    refresh=refresh,
+                )
+            else:
+                loaded_reference, result = load_reference(
+                    context["source_circuit_key"], refresh=refresh
+                )
             reference = loaded_reference
             dimensions_dir = (CURATED_DATA_DIR / "dimensions").resolve()
             legacy_circuit = None
@@ -454,6 +537,8 @@ def run_weekend_weather_pipeline(
                 "curated_path": _relative(outputs["circuit"]),
                 "curated_sha256": sha256(outputs["circuit"]),
             }
+        except CircuitResolutionError as exc:
+            jobs["wikidata"] = exc.result
         except MissingCircuitMappingError as exc:
             try:
                 jobs["wikidata"] = discover_circuit_candidates(
@@ -533,6 +618,12 @@ def run_weekend_weather_pipeline(
                 .get("mapping", {})
                 .get("schema_version"),
                 "sha256": jobs.get("wikidata", {}).get("mapping", {}).get("sha256"),
+                "auto_schema_version": jobs.get("wikidata", {})
+                .get("auto_mapping", {})
+                .get("schema_version"),
+                "auto_sha256": jobs.get("wikidata", {})
+                .get("auto_mapping", {})
+                .get("sha256"),
             },
             "jobs": {
                 name: {

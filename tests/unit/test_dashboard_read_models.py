@@ -46,6 +46,16 @@ class DashboardReadModelsTest(unittest.TestCase):
             self.assertEqual(available_seasons(manifest_dir), (2026,))
             frame = load_master_table(2026, "meeting", manifest_dir=manifest_dir)
             self.assertEqual(frame.iloc[0]["meeting_id"], "openf1:meeting:7")
+            manifest = json.loads(
+                (manifest_dir / "master_data_2026.json").read_text(encoding="utf-8")
+            )
+            manifest["tables"]["meeting"]["sha256"] = file_hash(meeting_path)
+            (manifest_dir / "master_data_2026.json").write_text(
+                json.dumps(manifest), encoding="utf-8"
+            )
+            meeting_path.write_bytes(b"corrupt")
+            with self.assertRaisesRegex(DashboardDataError, "hash check"):
+                load_master_table(2026, "meeting", manifest_dir=manifest_dir)
 
     def test_selects_latest_matching_manifest_and_checks_hash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -59,8 +69,8 @@ class DashboardReadModelsTest(unittest.TestCase):
             pd.DataFrame([{"position": 1}]).to_parquet(current_path, index=False)
 
             for name, retrieved_at, data_path in (
-                ("old", "2026-08-01T00:00:00Z", old_path),
-                ("current", "2026-08-02T00:00:00Z", current_path),
+                    ("old", "2026-08-01T00:00:00Z", old_path),
+                    ("current", "2026-08-02T00:00:00Z", current_path),
             ):
                 (session_dir / f"session_42_{name}.json").write_text(
                     json.dumps(
@@ -126,4 +136,3 @@ class DashboardReadModelsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

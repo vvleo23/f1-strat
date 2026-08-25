@@ -107,7 +107,11 @@ def load_master_table(
     table_info = manifest.get("tables", {}).get(table)
     if not isinstance(table_info, dict) or not table_info.get("path"):
         raise DashboardDataError(f"Master data for {season} has no {table} table.")
-    frame = _read_verified_parquet(str(table_info["path"]))
+    expected_hash = table_info.get("sha256")
+    frame = _read_verified_parquet(
+        str(table_info["path"]),
+        str(expected_hash) if expected_hash else None,
+    )
     expected_rows = table_info.get("row_count")
     if expected_rows is not None and len(frame) != int(str(expected_rows)):
         raise DashboardDataError(

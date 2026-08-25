@@ -32,6 +32,7 @@ from f1_pipeline.sources.openf1 import (
     session_cache_path as cache_path,
     write_latest_parquet,
 )
+from f1_pipeline.temporal import TemporalCutError, decision_timestamp
 
 DEFAULT_SESSION_KEY = 11334
 DEFAULT_FOCUS_DRIVER = "ANT"
@@ -112,6 +113,7 @@ class ReplayFrame:
     status: str
     cars: tuple[CarState, ...]
     projection: PitProjection | None
+    reference_lap_time: float | None = None
 
 
 @dataclass(frozen=True)
@@ -119,7 +121,7 @@ class ReplayResult:
     """Ergebnis der Replay-Rekonstruktion."""
 
     frames: tuple[ReplayFrame, ...]
-    reference_lap_time: float
+    reference_lap_time: float | None
     race_start: pd.Timestamp
     race_end: pd.Timestamp
 
@@ -380,7 +382,7 @@ def status_events(
 
 
 def reconstruct_absolute_gaps(
-        rows: pd.DataFrame, reference_lap_time: float
+        rows: pd.DataFrame, reference_lap_time: float | None
 ) -> list[dict[str, Any]]:
     """Reconstruct absolute gaps, including lapped cars."""
     records = cast(list[dict[str, Any]], rows.to_dict("records"))
@@ -406,10 +408,12 @@ def reconstruct_absolute_gaps(
         elif numeric_gap is not None:
             absolute_gap = max(0.0, numeric_gap)
         elif lap_deficit is not None:
-            candidates = [lap_deficit * reference_lap_time]
+            candidates = []
+            if reference_lap_time is not None:
+                candidates.append(lap_deficit * reference_lap_time)
             if previous_gap is not None and interval is not None:
                 candidates.append(previous_gap + max(0.0, interval))
-            absolute_gap = max(candidates)
+            absolute_gap = max(candidates) if candidates else math.nan
         elif previous_gap is not None and interval is not None:
             absolute_gap = previous_gap + max(0.0, interval)
         else:
@@ -466,7 +470,7 @@ def project_pit_exit(
 def build_location_progress(location: pd.DataFrame, laps: pd.DataFrame) -> pd.DataFrame:
     """Calculate geometric lap progress for each location measurement.
 
-    The normalization uses the observed x/y/z path length within the same lap.
+    The normalization uses the observed x/y/z path length of the previous completed lap.
     It is only used for visualization and does not affect strategy or pit-position calculations.
     """
     locations = location.copy()
@@ -491,15 +495,22 @@ def build_location_progress(location: pd.DataFrame, laps: pd.DataFrame) -> pd.Da
         ].drop_duplicates("lap_started_at", keep="last")
         start_rows = list(starts.itertuples(index=False))
 
-        for current, following in zip(start_rows, start_rows[1:]):
+        previous_lap_distance: float | None = None
+        for index, current in enumerate(start_rows):
             start_at = cast(pd.Timestamp, cast(Any, current.lap_started_at))
-            end_at = cast(pd.Timestamp, cast(Any, following.lap_started_at))
-            samples = driver_locations[
-                driver_locations["location_at"].between(
-                    start_at, end_at, inclusive="both"
-                )
-            ].copy()
-            if len(samples) < 3:
+            following = start_rows[index + 1] if index + 1 < len(start_rows) else None
+            if following is None:
+                samples = driver_locations[
+                    driver_locations["location_at"].ge(start_at)
+                ].copy()
+            else:
+                end_at = cast(pd.Timestamp, cast(Any, following.lap_started_at))
+                samples = driver_locations[
+                    driver_locations["location_at"].between(
+                        start_at, end_at, inclusive="both"
+                    )
+                ].copy()
+            if samples.empty:
                 continue
 
             coordinates = samples[["x", "y", "z"]].to_numpy(dtype=float)
@@ -507,34 +518,44 @@ def build_location_progress(location: pd.DataFrame, laps: pd.DataFrame) -> pd.Da
             segments = np.linalg.norm(np.diff(coordinates, axis=0), axis=1)
             segment_times = elapsed[1:]
             valid_speed = segment_times > 0
+            segments[~valid_speed] = 0
             speeds = np.divide(
                 segments,
                 segment_times,
                 out=np.zeros_like(segments),
                 where=valid_speed,
             )
-            positive_speeds = speeds[(speeds > 0) & np.isfinite(speeds)]
-            if positive_speeds.size:
-                median_speed = float(np.median(positive_speeds))
-                implausible = speeds > median_speed * 6
-                segments[implausible] = median_speed * segment_times[implausible]
+            accepted_speeds: list[float] = []
+            for segment_index, speed in enumerate(speeds):
+                if not math.isfinite(speed) or speed <= 0:
+                    continue
+                if accepted_speeds:
+                    median_speed = float(np.median(accepted_speeds))
+                    if speed > median_speed * 6:
+                        speed = median_speed
+                        segments[segment_index] = speed * segment_times[segment_index]
+                accepted_speeds.append(float(speed))
 
             cumulative = np.concatenate(([0.0], np.cumsum(segments)))
-            total_distance = float(cumulative[-1])
-            if not math.isfinite(total_distance) or total_distance <= 0:
-                continue
-            samples["track_progress"] = np.clip(cumulative / total_distance, 0, 1)
-            samples["lap_number_from_location"] = int(current.lap_number)
-            progress_parts.append(
-                samples[
-                    [
-                        "location_at",
-                        "driver_number",
-                        "track_progress",
-                        "lap_number_from_location",
+            if previous_lap_distance is not None:
+                samples["track_progress"] = np.clip(
+                    cumulative / previous_lap_distance, 0, 1
+                )
+                samples["lap_number_from_location"] = int(current.lap_number)
+                progress_parts.append(
+                    samples[
+                        [
+                            "location_at",
+                            "driver_number",
+                            "track_progress",
+                            "lap_number_from_location",
+                        ]
                     ]
-                ]
-            )
+                )
+            if following is not None and len(samples) >= 3:
+                total_distance = float(cumulative[-1])
+                if math.isfinite(total_distance) and total_distance > 0:
+                    previous_lap_distance = total_distance
 
     if not progress_parts:
         raise CircleOfDoomError(
@@ -661,21 +682,65 @@ def _prepare_asof_grid(
     return grid.sort_values(["date", "driver_number"]).reset_index(drop=True)
 
 
-def _build_stint_lookup(stints: pd.DataFrame) -> dict[int, list[dict[str, Any]]]:
+def _build_stint_lookup(
+        stints: pd.DataFrame, laps: pd.DataFrame
+) -> dict[int, list[dict[str, Any]]]:
     lookup: dict[int, list[dict[str, Any]]] = {}
     if stints.empty:
         return lookup
-    for row in cast(list[dict[str, Any]], stints.to_dict("records")):
+    lap_ends: dict[tuple[int, int], pd.Timestamp] = {}
+    if not laps.empty and "lap_duration" in laps.columns:
+        timed_laps = laps.copy()
+        timed_laps["_started_at"] = parse_openf1_datetimes(timed_laps["date_start"])
+        timed_laps["_duration"] = pd.to_numeric(
+            timed_laps["lap_duration"], errors="coerce"
+        )
+        timed_laps["_ended_at"] = timed_laps["_started_at"] + pd.to_timedelta(
+            timed_laps["_duration"], unit="s"
+        )
+        for lap in cast(
+                list[dict[str, Any]],
+                timed_laps.dropna(
+                    subset=["driver_number", "lap_number", "_ended_at"]
+                ).to_dict("records"),
+        ):
+            lap_ends[(int(lap["driver_number"]), int(lap["lap_number"]))] = cast(
+                pd.Timestamp, lap["_ended_at"]
+            )
+    for source_row in cast(list[dict[str, Any]], stints.to_dict("records")):
+        row = dict(source_row)
+        if "available_at" in stints.columns:
+            available_at = pd.to_datetime(
+                pd.Series([row.get("available_at")]),
+                format="mixed",
+                utc=True,
+                errors="coerce",
+            ).iloc[0]
+        else:
+            driver = as_finite_float(row.get("driver_number"))
+            lap_end = as_finite_float(row.get("lap_end"))
+            available_at = (
+                lap_ends.get((int(driver), int(lap_end)), pd.NaT)
+                if driver is not None and lap_end is not None
+                else pd.NaT
+            )
+        row["_available_at"] = available_at
         lookup.setdefault(int(row["driver_number"]), []).append(row)
     for rows in lookup.values():
-        rows.sort(key=lambda row: int(row.get("lap_start") or 0))
+        rows.sort(key=lambda stint_row: int(stint_row.get("lap_start") or 0))
     return lookup
 
 
 def _tyre_at_lap(
-        stint_lookup: dict[int, list[dict[str, Any]]], driver: int, lap: int
+        stint_lookup: dict[int, list[dict[str, Any]]],
+        driver: int,
+        lap: int,
+        decision_time: pd.Timestamp,
 ) -> tuple[str | None, int | None]:
     for stint in stint_lookup.get(driver, []):
+        available_at = stint.get("_available_at")
+        if not isinstance(available_at, pd.Timestamp) or available_at > decision_time:
+            continue
         start = int(stint.get("lap_start") or 0)
         end_value = as_finite_float(stint.get("lap_end"))
         end = int(end_value) if end_value is not None else math.inf
@@ -687,6 +752,38 @@ def _tyre_at_lap(
     return None, None
 
 
+def _reference_lap_time_at(
+        laps: pd.DataFrame, pits: pd.DataFrame, decision_time: pd.Timestamp
+) -> float | None:
+    available_laps = laps.copy()
+    available_laps["_started_at"] = parse_openf1_datetimes(
+        available_laps["date_start"]
+    )
+    available_laps["_duration"] = pd.to_numeric(
+        available_laps["lap_duration"], errors="coerce"
+    )
+    available_laps["_available_at"] = available_laps["_started_at"] + pd.to_timedelta(
+        available_laps["_duration"], unit="s"
+    )
+    available_laps = available_laps[
+        available_laps["_available_at"].notna()
+        & available_laps["_available_at"].le(decision_time)
+        ]
+    available_pits = pits.copy()
+    if not available_pits.empty:
+        if "date" not in available_pits.columns:
+            available_pits = available_pits.iloc[0:0]
+        else:
+            pit_times = parse_openf1_datetimes(available_pits["date"])
+            available_pits = available_pits[
+                pit_times.notna() & pit_times.le(decision_time)
+                ]
+    try:
+        return estimate_reference_lap_time(available_laps, available_pits)
+    except CircleOfDoomError:
+        return None
+
+
 def build_replay(
         datasets: dict[str, pd.DataFrame],
         *,
@@ -695,6 +792,7 @@ def build_replay(
         neutralized_pit_loss: float,
         frame_seconds: int,
         max_staleness_seconds: int,
+        decision_time: str | pd.Timestamp | None = None,
 ) -> ReplayResult:
     """Reconstruct all race replay frames without future measurements."""
     if frame_seconds <= 0:
@@ -704,8 +802,20 @@ def build_replay(
     if green_pit_loss < 0 or neutralized_pit_loss < 0:
         raise ValueError("Pit-loss values must not be negative.")
 
-    race_start, race_end = infer_race_window(datasets["laps"], datasets["race_control"])
-    reference_lap_time = estimate_reference_lap_time(datasets["laps"], datasets["pit"])
+    race_start, source_race_end = infer_race_window(
+        datasets["laps"], datasets["race_control"]
+    )
+    try:
+        cut_time = (
+            decision_timestamp(decision_time)
+            if decision_time is not None
+            else source_race_end
+        )
+    except TemporalCutError as exc:
+        raise CircleOfDoomError(str(exc)) from exc
+    if cut_time < race_start:
+        raise CircleOfDoomError("decision_time is before the race start.")
+    race_end = min(source_race_end, cut_time)
     grid = _prepare_asof_grid(
         datasets,
         race_start,
@@ -725,7 +835,7 @@ def build_replay(
     if focus_driver not in driver_meta:
         raise CircleOfDoomError(f"Driver {focus_driver} is not present in this session.")
 
-    stint_lookup = _build_stint_lookup(datasets["stints"])
+    stint_lookup = _build_stint_lookup(datasets["stints"], datasets["laps"])
     frames: list[ReplayFrame] = []
 
     for date, snapshot in grid.groupby("date", sort=True):
@@ -734,6 +844,10 @@ def build_replay(
             ].copy()
         if active.empty:
             continue
+        frame_time = cast(pd.Timestamp, date)
+        reference_lap_time = _reference_lap_time_at(
+            datasets["laps"], datasets["pit"], frame_time
+        )
         reconstructed = reconstruct_absolute_gaps(active, reference_lap_time)
         cars: list[CarState] = []
 
@@ -745,7 +859,9 @@ def build_replay(
             )
             lap_value = as_finite_float(record.get("lap_number"))
             lap_number = max(1, int(lap_value)) if lap_value is not None else 1
-            compound, tyre_age = _tyre_at_lap(stint_lookup, driver_number, lap_number)
+            compound, tyre_age = _tyre_at_lap(
+                stint_lookup, driver_number, lap_number, frame_time
+            )
             raw_gap = record.get("gap_to_leader")
             if isinstance(raw_gap, str) and parse_lap_deficit(raw_gap) is not None:
                 displayed_gap = raw_gap.upper()
@@ -778,8 +894,10 @@ def build_replay(
         pit_loss = (
             neutralized_pit_loss if status in {"SC", "VSC"} else green_pit_loss
         )
-        projection = project_pit_exit(
-            cars, focus_driver, pit_loss, reference_lap_time
+        projection = (
+            project_pit_exit(cars, focus_driver, pit_loss, reference_lap_time)
+            if reference_lap_time is not None
+            else None
         )
         lap_number = max((car.lap_number for car in cars), default=1)
         frames.append(
@@ -789,12 +907,18 @@ def build_replay(
                 status=status,
                 cars=tuple(cars),
                 projection=projection,
+                reference_lap_time=reference_lap_time,
             )
         )
 
     if not frames:
         raise CircleOfDoomError("Es konnten keine Replay-Frames rekonstruiert werden.")
-    return ReplayResult(tuple(frames), reference_lap_time, race_start, race_end)
+    return ReplayResult(
+        tuple(frames),
+        _reference_lap_time_at(datasets["laps"], datasets["pit"], race_end),
+        race_start,
+        race_end,
+    )
 
 
 def resolve_driver_number(drivers: pd.DataFrame, selector: str) -> int:
@@ -828,7 +952,7 @@ def _projection_description(projection: PitProjection | None) -> str:
 
 def _frame_traces(
         frame: ReplayFrame,
-        reference_lap_time: float,
+        reference_lap_time: float | None,
         focus_driver: int,
         driver_order: tuple[int, ...] | None = None,
         geometry: TrackGeometry | None = None,
@@ -898,7 +1022,7 @@ def _frame_traces(
     )
 
     projection = frame.projection
-    if projection is None or not show_pit_projection:
+    if projection is None or reference_lap_time is None or not show_pit_projection:
         projection_trace = go.Scattergl(
             x=[],
             y=[],
@@ -1287,7 +1411,7 @@ def create_figure(
     driver_order = _replay_driver_order(replay)
     first_traces = _frame_traces(
         replay.frames[0],
-        replay.reference_lap_time,
+        replay.frames[0].reference_lap_time,
         focus_driver,
         driver_order,
         track_geometry,
@@ -1301,7 +1425,7 @@ def create_figure(
         name = f"frame-{index}"
         traces = _frame_traces(
             frame,
-            replay.reference_lap_time,
+            frame.reference_lap_time,
             focus_driver,
             driver_order,
             track_geometry,
@@ -1363,7 +1487,7 @@ def create_figure(
                         "Gap = OpenF1 gap_to_leader",
                         *(
                             [
-                                f"Pit projection using reference lap {replay.reference_lap_time:.1f}s"
+                                "Pit projection uses point-in-time reference pace"
                             ]
                             if show_pit_projection
                             else []
@@ -1463,6 +1587,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_STALENESS_SECONDS,
         help="Maximum age of carried-forward location measurements in seconds.",
     )
+    parser.add_argument(
+        "--decision-time",
+        help="UTC cutoff for the last visible replay measurement.",
+    )
     parser.add_argument("--refresh", action="store_true", help="Refresh the OpenF1 cache.")
     parser.add_argument(
         "--build-geometry",
@@ -1491,6 +1619,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         datasets = load_session_datasets(args.session_key, refresh=args.refresh)
         session = datasets["sessions"].iloc[0]
+        season = int(session["year"]) if pd.notna(session.get("year")) else 2026
         meeting_key = int(session["meeting_key"]) if pd.notna(session.get("meeting_key")) else None
         circuit_id = (
             f"openf1:circuit:{int(session['circuit_key'])}"
@@ -1500,12 +1629,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.build_geometry:
             from f1_pipeline.geometry import build_session_geometry
 
-            build_session_geometry(args.session_key)
+            build_session_geometry(args.session_key, season=season)
         geometry = synthetic_track_geometry()
         if args.geometry_mode == "stored":
             try:
                 geometry = load_track_geometry(
                     args.session_key,
+                    season=season,
                     meeting_key=meeting_key,
                     circuit_id=circuit_id,
                 ) or synthetic_track_geometry()
@@ -1524,6 +1654,7 @@ def main(argv: list[str] | None = None) -> int:
             neutralized_pit_loss=args.neutralized_pit_loss,
             frame_seconds=args.frame_seconds,
             max_staleness_seconds=args.max_staleness,
+            decision_time=args.decision_time,
         )
         figure = create_figure(
             replay,
@@ -1553,7 +1684,8 @@ def main(argv: list[str] | None = None) -> int:
             f"Focus: {focus_acronym} ({focus_driver})\n"
             f"Geometry: {geometry.label}\n"
             f"Frames: {len(replay.frames):,}\n"
-            f"Reference lap time: {replay.reference_lap_time:.3f}s"
+            f"Reference lap time: "
+            f"{f'{replay.reference_lap_time:.3f}s' if replay.reference_lap_time is not None else 'unavailable'}"
         )
         if args.open:
             webbrowser.open(output.as_uri())

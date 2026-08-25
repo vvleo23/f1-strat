@@ -425,8 +425,10 @@ def validate_persisted_tables(table_paths: dict[str, Path]) -> dict[str, int]:
     return {name: len(frame) for name, frame in frames.items()}
 
 
-def _load_existing_geometry() -> list[dict[str, Any]]:
-    path = CURATED_DATA_DIR / "dimensions" / "circuit_geometry.parquet"
+def _load_existing_geometry(season: int) -> list[dict[str, Any]]:
+    path = master_table_path("circuit_geometry", season)
+    if not path.exists() and season == LEGACY_DIMENSION_SEASON:
+        path = CURATED_DATA_DIR / "dimensions" / "circuit_geometry.parquet"
     if not path.exists():
         return []
     try:
@@ -667,7 +669,7 @@ def load_master_data(
         season,
         ingested_at,
         roster_key,
-        circuit_geometry=_load_existing_geometry(),
+        circuit_geometry=_load_existing_geometry(season),
     )
     for fetched, snapshot_path, latest_path in (
             (meeting_fetched, meeting_input_path, meeting_path),
@@ -707,6 +709,7 @@ def load_master_data(
             name: {
                 "path": str(path.relative_to(CURATED_DATA_DIR.parent.parent)),
                 "row_count": verified_row_counts[name],
+                "sha256": sha256(path),
             }
             for name, path in output_paths.items()
         },

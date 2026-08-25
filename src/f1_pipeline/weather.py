@@ -5,7 +5,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from f1_pipeline.sources.open_meteo import utc_timestamp
+from f1_pipeline.temporal import TemporalCutError, cut_facts, decision_timestamp
 
 
 class WeatherCutError(RuntimeError):
@@ -32,7 +32,10 @@ def build_weather_cut(
     *,
     decision_time: str | datetime | pd.Timestamp,
 ) -> WeatherCut:
-    cut_time = utc_timestamp(decision_time, "decision_time")
+    try:
+        cut_time = decision_timestamp(decision_time)
+    except TemporalCutError as exc:
+        raise WeatherCutError(str(exc)) from exc
     selected_forecast = forecasts.iloc[0:0].copy()
     if not forecasts.empty:
         for column in ("snapshot_id", "available_at", "run_initialized_at", "valid_time"):
@@ -69,20 +72,12 @@ def build_weather_cut(
 
     selected_observations = observations.iloc[0:0].copy()
     if not observations.empty:
-        event_times = _timestamps(observations, "event_time")
-        available_times = _timestamps(observations, "available_at")
-        selected_observations = observations[
-            event_times.notna()
-            & available_times.notna()
-            & event_times.le(cut_time)
-            & available_times.le(cut_time)
-        ].copy()
-        selected_observations["event_time"] = event_times.loc[
-            selected_observations.index
-        ]
-        selected_observations["available_at"] = available_times.loc[
-            selected_observations.index
-        ]
+        try:
+            selected_observations = cut_facts(
+                observations, decision_time=cut_time
+            )
+        except TemporalCutError as exc:
+            raise WeatherCutError(str(exc)) from exc
         selected_observations = selected_observations.sort_values(
             ["event_time", "available_at"]
         ).reset_index(drop=True)

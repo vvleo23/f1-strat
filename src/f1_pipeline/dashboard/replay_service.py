@@ -7,7 +7,11 @@ from typing import Any
 import pandas as pd
 
 from f1_pipeline.dashboard.read_models import SessionBundle, load_session_bundle
-from f1_pipeline.geometry import load_track_geometry, synthetic_track_geometry
+from f1_pipeline.geometry import (
+    TrackGeometryError,
+    load_track_geometry,
+    synthetic_track_geometry,
+)
 from f1_pipeline.replay.circle_of_doom import (
     CarState,
     DATASET_ENDPOINTS,
@@ -55,18 +59,22 @@ def final_reconstructed_positions(replay: ReplayResult) -> pd.DataFrame:
     terminal_cars = sorted(
         terminal.cars, key=lambda candidate_car: candidate_car.position
     )
-    terminal_drivers = {car.driver_number for car in terminal_cars}
+    terminal_drivers: set[int] = {int(car.driver_number) for car in terminal_cars}
+
+    def last_seen_sort_key(candidate_car: CarState) -> tuple[int, int, int]:
+        return (
+            -candidate_car.lap_number,
+            candidate_car.position,
+            candidate_car.driver_number,
+        )
+
     last_seen = sorted(
         (
             car
             for driver_number, car in latest_by_driver.items()
             if driver_number not in terminal_drivers
         ),
-        key=lambda candidate_car: (
-            -candidate_car.lap_number,
-            candidate_car.position,
-            candidate_car.driver_number,
-        ),
+        key=last_seen_sort_key,
     )
     rows: list[dict[str, Any]] = []
     for position, car in enumerate((*terminal_cars, *last_seen), start=1):
@@ -87,8 +95,12 @@ def final_reconstructed_positions(replay: ReplayResult) -> pd.DataFrame:
 def build_replay_view(
         session_key: int,
         *,
+        season: int | None = None,
+        meeting_key: int | None = None,
+        circuit_id: str | None = None,
         focus_driver: int | None = None,
         frame_seconds: int = DEFAULT_FRAME_SECONDS,
+        decision_time: str | pd.Timestamp | None = None,
 ) -> ReplayView:
     bundle = replay_bundle(session_key)
     datasets = bundle.frames
@@ -121,9 +133,18 @@ def build_replay_view(
         neutralized_pit_loss=DEFAULT_NEUTRALIZED_PIT_LOSS_SECONDS,
         frame_seconds=frame_seconds,
         max_staleness_seconds=DEFAULT_MAX_STALENESS_SECONDS,
+        decision_time=decision_time,
     )
     circle = synthetic_track_geometry()
-    stored = load_track_geometry(session_key)
+    try:
+        stored = load_track_geometry(
+            session_key,
+            season=season,
+            meeting_key=meeting_key,
+            circuit_id=circuit_id,
+        )
+    except TrackGeometryError:
+        stored = None
 
     def render(geometry) -> str:
         figure = create_figure(

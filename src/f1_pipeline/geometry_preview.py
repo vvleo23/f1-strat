@@ -9,7 +9,6 @@ from pathlib import Path
 import plotly.graph_objects as go
 
 from f1_pipeline.geometry import (
-    GEOMETRY_PATH,
     TrackGeometry,
     TrackGeometryError,
     load_track_geometry,
@@ -112,7 +111,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
         description="Create an interactive preview of stored local circuit geometry."
     )
     parser.add_argument("--session-key", type=int, required=True)
-    parser.add_argument("--geometry-path", type=Path, default=GEOMETRY_PATH)
+    parser.add_argument("--season", type=int, default=2026)
+    parser.add_argument("--geometry-path", type=Path)
     parser.add_argument("--output", type=Path, help="Custom HTML output path.")
     parser.add_argument("--open", action="store_true", help="Open the result in a browser.")
     parser.add_argument(
@@ -126,7 +126,11 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_argument_parser().parse_args(argv)
     try:
-        geometry = load_track_geometry(args.session_key, path=args.geometry_path)
+        geometry = load_track_geometry(
+            args.session_key,
+            season=args.season,
+            path=args.geometry_path,
+        )
         if geometry is None:
             raise TrackGeometryError(
                 f"No stored geometry was found for session {args.session_key}."

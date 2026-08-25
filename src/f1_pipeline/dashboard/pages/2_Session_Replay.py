@@ -19,6 +19,7 @@ from f1_pipeline.dashboard.read_models import (
     source_session_key,
 )
 from f1_pipeline.dashboard.replay_service import build_replay_view
+from f1_pipeline.temporal import TemporalCutError, cut_facts
 from f1_pipeline.weather import WeatherCutError, build_weather_cut
 
 JOB_SERVICE_URL = os.getenv("F1_JOB_SERVICE_URL", "http://127.0.0.1:8765")
@@ -30,8 +31,22 @@ def catalog_for(season: int):
 
 
 @st.cache_data(show_spinner="Building historical replay…")
-def replay_for(session_key: int, focus_driver: int | None):
-    return build_replay_view(session_key, focus_driver=focus_driver)
+def replay_for(
+        session_key: int,
+        season: int,
+        meeting_key: int,
+        circuit_id: str,
+        focus_driver: int | None,
+        decision_time: str,
+):
+    return build_replay_view(
+        session_key,
+        season=season,
+        meeting_key=meeting_key,
+        circuit_id=circuit_id,
+        focus_driver=focus_driver,
+        decision_time=decision_time,
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -175,7 +190,7 @@ def main() -> None:
     if races.empty:
         st.info("No completed race sessions are available for this season.")
         return
-    meetings = catalog.meetings[["meeting_id", "meeting_name"]]
+    meetings = catalog.meetings[["meeting_id", "meeting_name", "circuit_id"]]
     races = races.merge(meetings, on="meeting_id", how="left")
     race_labels = {
         source_session_key(row.session_id): (
@@ -236,7 +251,14 @@ def main() -> None:
     show_job_status()
 
     try:
-        view = replay_for(int(session_key), focus_driver)
+        view = replay_for(
+            int(session_key),
+            int(season),
+            source_meeting_key(selected["meeting_id"]),
+            str(selected["circuit_id"]),
+            focus_driver,
+            decision_time.isoformat(),
+        )
     except (DashboardDataError, ValueError, OSError) as exc:
         st.warning(f"Replay data is incomplete: {exc}")
         st.info("Use Load replay data, then refresh after the job completes.")
@@ -260,6 +282,14 @@ def main() -> None:
         st.subheader("Final reconstructed positions")
         st.dataframe(view.positions, hide_index=True, use_container_width=True)
     race_control = session_silver(session_key, "race_control")
+    if not race_control.empty:
+        try:
+            race_control = cut_facts(
+                race_control, decision_time=decision_time
+            )
+        except TemporalCutError as exc:
+            st.warning(str(exc))
+            race_control = race_control.iloc[0:0]
     with right:
         st.subheader("Race Control events")
         if race_control.empty:

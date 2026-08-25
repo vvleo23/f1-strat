@@ -15,10 +15,13 @@ from f1_pipeline.geometry import (
     TrackGeometryError,
     build_centerline,
     build_geometry_record,
+    build_manifest_geometry,
+    geometry_table_path,
     load_track_geometry,
     point_at_progress,
     write_geometry_record,
 )
+from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
 
 
 class GeometryTest(unittest.TestCase):
@@ -79,7 +82,7 @@ class GeometryTest(unittest.TestCase):
                 {
                     "driver_number": 3,
                     "date": pd.Timestamp("2026-07-26T13:00:00Z")
-                    + timedelta(seconds=index / 4),
+                            + timedelta(seconds=index / 4),
                     "x": np.cos(angle),
                     "y": np.sin(angle),
                     "z": 0.0,
@@ -148,6 +151,98 @@ class GeometryTest(unittest.TestCase):
         self.assertGreaterEqual(len(geometry.points), 3)
         self.assertEqual(geometry.points[0], geometry.points[-1])
 
+    def test_manifest_geometry_uses_verified_inputs_and_season_partition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_paths = {
+                "sessions": root / "raw" / "sessions.parquet",
+                "laps": root / "raw" / "laps.parquet",
+                "location": root / "raw" / "location.parquet",
+            }
+            atomic_parquet(pd.DataFrame([{"session_key": 42}]), raw_paths["sessions"])
+            atomic_parquet(self.laps, raw_paths["laps"])
+            atomic_parquet(self.locations, raw_paths["location"])
+            manifest = {
+                "session_key": 42,
+                "manifest_path": str(root / "session.json"),
+                "manifest_sha256": "session-hash",
+                "endpoints": {
+                    name: {
+                        "status": "available",
+                        "raw_path": str(path),
+                        "raw_sha256": sha256(path),
+                        "retrieved_at": "2025-06-01T12:00:00+00:00",
+                    }
+                    for name, path in raw_paths.items()
+                },
+            }
+            curated_dir = root / "curated"
+            master_manifest_path = curated_dir / "manifests" / "master_data_2025.json"
+            atomic_json({"tables": {}}, master_manifest_path)
+
+            result, manifest_path = build_manifest_geometry(
+                manifest,
+                season=2025,
+                meeting_key=10,
+                circuit_id="openf1:circuit:7",
+                curated_dir=curated_dir,
+            )
+            geometry = load_track_geometry(
+                42,
+                season=2025,
+                circuit_id="openf1:circuit:7",
+                curated_dir=curated_dir,
+            )
+
+            self.assertEqual(
+                Path(result["curated_path"]),
+                geometry_table_path(2025, curated_dir),
+            )
+            self.assertTrue(manifest_path.is_file())
+            self.assertIsNotNone(geometry)
+            self.assertEqual(result["inputs"]["location"]["raw_sha256"], sha256(raw_paths["location"]))
+            master_manifest = json.loads(master_manifest_path.read_text(encoding="utf-8"))
+            master_geometry = master_manifest["tables"]["circuit_geometry"]
+            self.assertEqual(master_geometry["row_count"], 1)
+            self.assertEqual(master_geometry["sha256"], result["curated_sha256"])
+            raw_paths["location"].write_bytes(b"corrupt")
+            with self.assertRaisesRegex(TrackGeometryError, "hash validation"):
+                build_manifest_geometry(
+                    manifest,
+                    season=2025,
+                    meeting_key=10,
+                    circuit_id="openf1:circuit:7",
+                    curated_dir=curated_dir,
+                )
+
+    def test_circuit_fallback_selects_latest_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "geometry.parquet"
+            for session_key, timestamp in (
+                    (10, "2025-01-01T00:00:00Z"),
+                    (20, "2025-02-01T00:00:00Z"),
+            ):
+                record = build_geometry_record(
+                    self.locations,
+                    self.laps,
+                    session_key=session_key,
+                    meeting_key=session_key,
+                    circuit_id="openf1:circuit:7",
+                    sample_laps=3,
+                    point_count=41,
+                    ingested_at=pd.Timestamp(timestamp),
+                )
+                write_geometry_record(record, path)
+
+            geometry = load_track_geometry(
+                99,
+                circuit_id="openf1:circuit:7",
+                path=path,
+            )
+
+            self.assertIsNotNone(geometry)
+            self.assertEqual(geometry.source_session_key, 20)
+
     def test_rejects_geometry_with_invalid_source_keys(self) -> None:
         record = build_geometry_record(
             self.locations,
@@ -171,4 +266,3 @@ class GeometryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

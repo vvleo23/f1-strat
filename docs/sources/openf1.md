@@ -1,6 +1,6 @@
 # OpenF1
 
-**Status:** Purpose-based session planning, Weekend Complete V1, results, standings, and all five Hungary 2026 sessions implemented; delayed scheduling and finalization remain planned.
+**Status:** Season-parameterized discovery, purpose-based planning, Weekend Complete V1, results, standings, and automatic local geometry are implemented; delayed scheduling and finalization remain planned.
 
 [OpenF1](https://openf1.org/) is the primary event-oriented source. Its HTTP API provides structured historical Formula 1 data with absolute timestamps and stable session keys.
 
@@ -19,9 +19,9 @@
 
 OpenF1 is the primary source for meeting/session discovery and the replay timeline. One shared transport and Bronze path convention serve master data, weekend ingestion, replay, and verification. The pipeline discovers every advertised session, including sprint formats, before selecting sessions by purpose and `decision_time` and then selecting endpoints by session type. FastF1 overlap is retained only as a separate cross-check.
 
-The `weekend` profile loads drivers, laps, stints, weather, and the applicable position, pit, interval, Race Control, result, and championship data. The OpenF1 `intervals` endpoint is not available for the verified Hungary practice and qualifying sessions and is therefore not requested for those session types. `weekend_complete_v1` additionally persists session responses for all selected sessions and high-volume `location` for sprint and race; replay and geometry can request location independently.
+The `weekend` profile loads drivers, laps, stints, weather, and the applicable position, pit, interval, Race Control, result, and championship data. The OpenF1 `intervals` endpoint is not requested for practice and qualifying. `weekend_complete_v1` additionally persists session responses for all selected sessions and high-volume `location` for sprint and race. When one session manifest contains usable `sessions`, `laps`, and `location` snapshots, the orchestrator hash-checks those exact immutable inputs and builds a local centerline automatically.
 
-For the Hungary weekend weather pipeline, OpenF1 `circuit_key=4` is the stable join to the reviewed Wikidata entity `Q171356`. OpenF1 provides the identity but not the WGS84 weather-reference coordinate.
+OpenF1 `circuit_key` is the stable join to a reviewed or uniquely auto-verified Wikidata identity. OpenF1 provides the source identity but not the WGS84 weather-reference coordinate.
 
 ## Access
 
@@ -34,7 +34,7 @@ For the Hungary weekend weather pipeline, OpenF1 `circuit_key=4` is the stable j
 
 `f1_pipeline.sources.weekend_weather_pipeline` discovers and ingests Practice 1 (`11335`), Practice 2 (`11336`), Practice 3 (`11337`), Qualifying (`11338`), and Race (`11342`) instead of deriving sequential keys. Each applicable endpoint is checked independently for response shape, required fields, session identity, UTC timestamps, duplicate business keys, and Parquet read-after-write integrity.
 
-The result records endpoint status, row count, raw and Silver paths, hashes, retrieval time, and error details in immutable session and weekend manifests. A failed endpoint does not remove successful snapshots or stop independent sessions and weather jobs. Existing valid snapshots are reported as `stale` when reused. Silver outputs cover session entries, laps, intervals, positions, pit stops, stints, Race Control events, weather observations, session results, driver standings, and team standings.
+The result records endpoint status, row count, raw and Silver paths, hashes, retrieval time, and error details in immutable session and weekend manifests. A failed endpoint does not remove successful snapshots or stop independent sessions, geometry, or weather jobs. Existing valid snapshots are reported as `stale` when reused. Geometry is persisted under `data/curated/dimensions/season=<year>/circuit_geometry.parquet` with a separate lineage manifest containing all input paths and hashes. Silver outputs cover session entries, laps, intervals, positions, pit stops, stints, Race Control events, weather observations, session results, driver standings, team standings, and local centerlines.
 
 ## Limits
 
@@ -45,4 +45,5 @@ The result records endpoint status, row count, raw and Silver paths, hashes, ret
 - OpenF1 weather is an observation source, not a substitute for an Open-Meteo forecast snapshot.
 - `location.x/y/z` is approximate and has no documented geographic coordinate system.
 - Location data may support relative movement and a local display centerline but cannot be placed on a world map without a validated transformation.
+- Geometry resolution prefers the exact session, then its meeting, then the latest matching circuit in the selected season; 2026 additionally supports the former global table as a compatibility fallback.
 - Original values, request parameters, session keys, retrieval time, and transformation metadata must remain traceable.
