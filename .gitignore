@@ -15,3 +15,4 @@ data/artifacts/
 __MACOSX/
 Thumbs.db
 Desktop.ini
+.agents/

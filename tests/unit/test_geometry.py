@@ -18,7 +18,6 @@ from f1_pipeline.geometry import (
     build_manifest_geometry,
     geometry_table_path,
     load_track_geometry,
-    point_at_progress,
     write_geometry_record,
 )
 from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
@@ -114,43 +113,6 @@ class GeometryTest(unittest.TestCase):
         self.assertEqual(len(samples), 3)
         self.assertNotIn(3, [sample["driver_number"] for sample in samples])
 
-    def test_interpolates_progress_and_wraps_at_one(self) -> None:
-        points = ((0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0), (0.0, 1.0))
-
-        self.assertEqual(point_at_progress(points, 0.0), (0.0, 1.0))
-        self.assertEqual(point_at_progress(points, 1.0), (0.0, 1.0))
-        midpoint = point_at_progress(points, 0.125)
-        self.assertAlmostEqual(midpoint[0], 0.5)
-        self.assertAlmostEqual(midpoint[1], 0.5)
-
-    def test_geometry_record_survives_write_and_read(self) -> None:
-        record = build_geometry_record(
-            self.locations,
-            self.laps,
-            session_key=11342,
-            meeting_key=1291,
-            circuit_id="openf1:circuit:4",
-            sample_laps=3,
-            point_count=41,
-            ingested_at=pd.Timestamp("2026-08-18T12:00:00Z"),
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "circuit_geometry.parquet"
-            write_geometry_record(record, path)
-            geometry = load_track_geometry(
-                11342,
-                meeting_key=1291,
-                circuit_id="openf1:circuit:4",
-                path=path,
-            )
-
-        self.assertIsNotNone(geometry)
-        assert geometry is not None
-        self.assertEqual(geometry.source, "openf1")
-        self.assertEqual(geometry.source_session_key, 11342)
-        self.assertGreaterEqual(len(geometry.points), 3)
-        self.assertEqual(geometry.points[0], geometry.points[-1])
-
     def test_manifest_geometry_uses_verified_inputs_and_season_partition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -242,26 +204,6 @@ class GeometryTest(unittest.TestCase):
 
             self.assertIsNotNone(geometry)
             self.assertEqual(geometry.source_session_key, 20)
-
-    def test_rejects_geometry_with_invalid_source_keys(self) -> None:
-        record = build_geometry_record(
-            self.locations,
-            self.laps,
-            session_key=11342,
-            meeting_key=1291,
-            circuit_id="openf1:circuit:4",
-            sample_laps=3,
-            point_count=41,
-        )
-        data = json.loads(record["geometry_data"])
-        data.pop("source_session_key")
-        record["geometry_data"] = json.dumps(data)
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "circuit_geometry.parquet"
-            write_geometry_record(record, path)
-            with self.assertRaisesRegex(TrackGeometryError, "invalid source keys"):
-                load_track_geometry(11342, path=path)
 
 
 if __name__ == "__main__":

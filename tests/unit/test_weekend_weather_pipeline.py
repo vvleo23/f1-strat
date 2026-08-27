@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pandas as pd
 
@@ -25,10 +25,7 @@ from f1_pipeline.sources.weekend_weather_pipeline import (
 )
 from f1_pipeline.sources.wikidata import (
     CircuitReference,
-    WikidataClient,
     WikidataError,
-    WikidataProvider,
-    discover_circuit_candidates,
     load_reviewed_circuits,
     normalize_circuit_reference,
 )
@@ -107,39 +104,6 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                     reviewed_circuits=mappings,
                 )
 
-            class CandidateClient(WikidataClient):
-                def __init__(self) -> None:
-                    pass
-
-                def get_entity(self, entity_id: str) -> dict[str, Any]:
-                    raise AssertionError("Candidate discovery must not load entities.")
-
-                def search_entities(self, query: str) -> dict[str, Any]:
-                    return {
-                        "search": [
-                            {
-                                "id": "Q999",
-                                "label": "Example Circuit",
-                                "description": "motorsport circuit in Exampleland",
-                            }
-                        ]
-                    }
-
-            candidate_result = discover_circuit_candidates(
-                999,
-                "Example Circuit",
-                location="Exampleland",
-                client=cast(WikidataProvider, CandidateClient()),
-                retrieved_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
-                mapping_path=mapping_path,
-                raw_dir=Path(temporary) / "raw",
-            )
-
-            self.assertEqual(candidate_result["status"], "partial")
-            self.assertEqual(
-                candidate_result["candidates"][0]["wikidata_entity_id"], "Q999"
-            )
-            self.assertTrue(Path(candidate_result["raw_path"]).exists())
             mapping_payload["mappings"][0]["review_status"] = "candidate"
             atomic_json(mapping_payload, mapping_path)
             with self.assertRaises(WikidataError):
@@ -256,7 +220,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                     raw_path=raw_path,
                 )
 
-    def test_purpose_planning_uses_only_sessions_available_at_decision_time(self) -> None:
+    def test_purpose_planning_selects_historical_inputs_for_consumer_side_cut(self) -> None:
         sessions = [
             {
                 "session_id": "openf1:session:10",

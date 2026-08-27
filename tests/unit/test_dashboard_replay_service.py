@@ -26,7 +26,7 @@ def car(driver_number: int, acronym: str, position: int, lap: int) -> CarState:
 
 
 class DashboardReplayServiceTest(unittest.TestCase):
-    def test_final_positions_use_fullest_frame_on_final_lap_and_append_retirements(
+    def test_display_order_uses_fullest_final_lap_frame_and_appends_last_seen_drivers(
             self,
     ) -> None:
         frames = (

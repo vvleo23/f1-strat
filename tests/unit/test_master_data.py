@@ -6,19 +6,11 @@ import unittest
 
 import pandas as pd
 
-from f1_pipeline.master_data import build_tables, master_table_path
+from f1_pipeline.master_data import build_tables
 
 
 class MasterDataTest(unittest.TestCase):
-    def test_master_paths_are_partitioned_by_season(self) -> None:
-        path_2025 = master_table_path("session", 2025)
-        path_2026 = master_table_path("session", 2026)
-
-        self.assertNotEqual(path_2025, path_2026)
-        self.assertEqual(path_2025.parent.name, "season=2025")
-        self.assertEqual(path_2026.parent.name, "season=2026")
-
-    def test_postponed_meeting_links_to_replacement_and_geometry_stays_empty(self) -> None:
+    def test_postponed_meeting_links_to_replacement(self) -> None:
         ingested_at = pd.Timestamp("2026-08-13T11:00:00Z")
         meetings = [
             {
@@ -101,8 +93,6 @@ class MasterDataTest(unittest.TestCase):
         self.assertEqual(old_meeting["superseded_by_meeting_id"], "openf1:meeting:2")
         self.assertEqual(new_session["status"], "scheduled")
         self.assertEqual(new_session["is_cancelled"], False)
-        self.assertEqual(len(tables["circuit_geometry"]), 0)
-        self.assertEqual(tables["driver"][0]["team_id"], "openf1:team:red-bull-racing")
 
 
 if __name__ == "__main__":

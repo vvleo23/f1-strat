@@ -162,7 +162,7 @@ class WikidataAutoResolutionTest(unittest.TestCase):
         self.assertEqual(len(result["rejected_candidates"]), 2)
         self.assertFalse(self.auto_mapping_path.exists())
 
-    def test_country_abbreviation_requires_all_other_circuit_evidence(self) -> None:
+    def test_accepts_known_country_abbreviation_with_complete_circuit_evidence(self) -> None:
         client = FakeWikidataClient(
             ["Q171402"],
             {
