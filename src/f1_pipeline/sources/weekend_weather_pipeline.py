@@ -249,6 +249,7 @@ def _enrich_circuit(
         path: Path,
         reference: CircuitReference,
         legacy_path: Path | None = None,
+        manifest_path: Path | None = None,
 ) -> None:
     circuits = pd.read_parquet(path)
     mask = circuits["source_circuit_key"].eq(reference.source_circuit_key)
@@ -277,6 +278,14 @@ def _enrich_circuit(
     if legacy_path is not None:
         if legacy_path != path:
             atomic_parquet(enriched, legacy_path)
+    if manifest_path is not None and manifest_path.is_file():
+        with manifest_path.open(encoding="utf-8") as stream:
+            manifest = json.load(stream)
+        circuit_table = manifest.get("tables", {}).get("circuit")
+        if isinstance(circuit_table, dict):
+            circuit_table["row_count"] = len(enriched)
+            circuit_table["sha256"] = sha256(path)
+            atomic_json(manifest, manifest_path)
 
 
 def _overall_status(jobs: dict[str, dict[str, Any]]) -> str:
@@ -530,7 +539,14 @@ def run_weekend_weather_pipeline(
                     dimensions_dir
             ):
                 legacy_circuit = dimensions_dir / "circuit.parquet"
-            _enrich_circuit(outputs["circuit"], loaded_reference, legacy_circuit)
+            _enrich_circuit(
+                outputs["circuit"],
+                loaded_reference,
+                legacy_circuit,
+                outputs.get("manifest"),
+            )
+            if "openf1" in jobs and outputs.get("manifest", Path()).is_file():
+                jobs["openf1"]["manifest_sha256"] = sha256(outputs["manifest"])
             jobs["wikidata"] = {
                 **result,
                 "reference": loaded_reference.to_dict(),

@@ -8,7 +8,14 @@
       "expected_label": "Hungaroring",
       "expected_country": "Hungary",
       "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 55,
+      "wikidata_entity_id": "Q173083",
+      "expected_label": "Circuit Zandvoort",
+      "expected_country": "Netherlands",
+      "review_status": "reviewed"
     }
   ]
 }
-

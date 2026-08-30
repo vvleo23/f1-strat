@@ -130,6 +130,11 @@ def main() -> None:
     except DashboardDataError as exc:
         st.error(str(exc))
         return
+    if "demo_data" in catalog.manifest_path.parts:
+        st.info(
+            "Using the bundled Hungaroring demo data. "
+            "Load a session to replace it with local data."
+        )
 
     meetings = catalog.meetings.sort_values("planned_start_utc")
     meeting_labels = {
@@ -172,8 +177,12 @@ def main() -> None:
     metrics[2].metric("Drivers", len(catalog.drivers))
     metrics[3].metric("Teams", len(catalog.teams))
 
+    st.caption(
+        "Selected session is the lightweight default. Complete weekend also loads "
+        "high-volume sprint and race location data."
+    )
     actions = st.columns(3)
-    if actions[0].button("Load selected session", use_container_width=True):
+    if actions[0].button("Load selected session (light)", use_container_width=True):
         _submit(
             {
                 "season": int(season),
@@ -203,7 +212,7 @@ def main() -> None:
         if isinstance(meeting_end, pd.Timestamp) and pd.notna(meeting_end)
         else decision_time_text
     )
-    if actions[1].button("Load complete weekend V1", use_container_width=True):
+    if actions[1].button("Load complete weekend (large)", use_container_width=True):
         _submit(
             {
                 "season": int(season),

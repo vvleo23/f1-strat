@@ -44,6 +44,7 @@ def replay_for(
         circuit_id: str,
         focus_driver: int | None,
         decision_time: str,
+        frame_seconds: int,
 ):
     return build_replay_view(
         session_key,
@@ -52,6 +53,7 @@ def replay_for(
         circuit_id=circuit_id,
         focus_driver=focus_driver,
         decision_time=decision_time,
+        frame_seconds=frame_seconds,
     )
 
 
@@ -189,6 +191,12 @@ def main() -> None:
     except DashboardDataError as exc:
         st.error(str(exc))
         return
+    using_demo = "demo_data" in catalog.manifest_path.parts
+    if using_demo:
+        st.info(
+            "Using the bundled Hungaroring demo data. "
+            "Load replay data for a full-resolution copy."
+        )
     races = catalog.sessions[
         catalog.sessions["session_type"].astype(str).str.casefold().eq("race")
         & catalog.sessions["status"].eq("completed")
@@ -264,6 +272,7 @@ def main() -> None:
             str(selected["circuit_id"]),
             focus_driver,
             decision_time.isoformat(),
+            12 if using_demo else 4,
         )
     except (DashboardDataError, ValueError, OSError) as exc:
         st.warning(f"Replay data is incomplete: {exc}")

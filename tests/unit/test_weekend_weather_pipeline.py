@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from f1_pipeline.persistence import atomic_json, atomic_parquet
+from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
 from f1_pipeline.planning import plan_sessions_for_purpose
 from f1_pipeline.sources.open_meteo import (
     HOURLY_VARIABLES,
@@ -400,7 +400,19 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                 ),
                 circuit_path,
             )
-            atomic_json({"status": "valid"}, manifest_path)
+            atomic_json(
+                {
+                    "status": "valid",
+                    "tables": {
+                        "circuit": {
+                            "path": str(circuit_path),
+                            "row_count": 1,
+                            "sha256": "before-enrichment",
+                        }
+                    },
+                },
+                manifest_path,
+            )
             outputs = {
                 "meeting": meeting_path,
                 "session": session_path,
@@ -522,6 +534,11 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             self.assertNotEqual(first_path, race_only_path)
             persisted = json.loads(first_path.read_text(encoding="utf-8"))
             self.assertEqual(persisted["run_id"], second["run_id"])
+            master_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                master_manifest["tables"]["circuit"]["sha256"],
+                sha256(circuit_path),
+            )
 
 
 if __name__ == "__main__":

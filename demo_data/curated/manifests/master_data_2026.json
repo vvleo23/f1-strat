@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "season": 2026,
+  "source_system": "openf1",
+  "ingested_at": "2026-07-26T16:00:00+00:00",
+  "roster_session_key": 11342,
+  "raw_inputs": [],
+  "tables": {
+    "season": {
+      "path": "demo_data/curated/dimensions/season=2026/season.parquet",
+      "row_count": 1,
+      "sha256": "de1512d61ea9b41ef11566bed8bb613efc18a07acb3fc5502151853ead43579c"
+    },
+    "meeting": {
+      "path": "demo_data/curated/dimensions/season=2026/meeting.parquet",
+      "row_count": 1,
+      "sha256": "f5cbd1c09a38b76f597f5b9f804710576c0b9e1ac7b4a20cc166c71a25bf50c4"
+    },
+    "session": {
+      "path": "demo_data/curated/dimensions/season=2026/session.parquet",
+      "row_count": 1,
+      "sha256": "a4afae752700de0aa2aa550173de702c874a86463f6a2a416016bc5ae38a4585"
+    },
+    "country": {
+      "path": "demo_data/curated/dimensions/season=2026/country.parquet",
+      "row_count": 1,
+      "sha256": "101bc9dc2bf41aa24e95c8501f0e5a58e613bff4a843f84ac0015db4b8f49987"
+    },
+    "circuit": {
+      "path": "demo_data/curated/dimensions/season=2026/circuit.parquet",
+      "row_count": 1,
+      "sha256": "04fc0669317c0b59f71dd5b66b7ef48c43e07f6902e181ccedd045be84f5a951"
+    },
+    "driver": {
+      "path": "demo_data/curated/dimensions/season=2026/driver.parquet",
+      "row_count": 21,
+      "sha256": "553dbe2e2cb2f259a30a2ff629218190de28070bd7f1000cafe7500404e3b174"
+    },
+    "team": {
+      "path": "demo_data/curated/dimensions/season=2026/team.parquet",
+      "row_count": 11,
+      "sha256": "053063c13fd196e55319f562b3f9d57446699b225755657c1c0a44941cb69ef4"
+    }
+  },
+  "validation": {
+    "status": "valid",
+    "checks": [
+      "schema",
+      "required_fields",
+      "primary_keys",
+      "foreign_keys",
+      "allowed_statuses",
+      "read_after_write"
+    ]
+  }
+}

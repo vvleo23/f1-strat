@@ -17,6 +17,7 @@ from f1_pipeline.sources.openf1 import (
     JsonClient,
     OpenF1Client,
     OpenF1Error,
+    location_driver_cache_path,
     make_parquet_safe,
     session_cache_path,
     write_latest_parquet,
@@ -348,6 +349,7 @@ def _load_endpoint(
         *,
         refresh: bool,
         raw_dir: Path,
+        driver_numbers: list[int] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     if not refresh:
         try:
@@ -367,13 +369,35 @@ def _load_endpoint(
                 "empty": frame.empty,
             }
     retrieved_at = datetime.now(timezone.utc)
-    payload = client.get_json(endpoint, {"session_key": session_key})
-    frame = make_parquet_safe(
-        endpoint,
-        pd.DataFrame(payload, columns=sorted(REQUIRED_COLUMNS[endpoint]))
-        if not payload
-        else pd.DataFrame(payload),
-    )
+    if endpoint == "location":
+        if not driver_numbers:
+            raise OpenF1WeekendError(
+                f"OpenF1 location requires drivers for session {session_key}."
+            )
+        location_frames: list[pd.DataFrame] = []
+        for driver_number in driver_numbers:
+            driver_path = location_driver_cache_path(session_key, driver_number)
+            if raw_dir != RAW_DATA_DIR:
+                driver_path = raw_dir / driver_path.name
+            if driver_path.exists() and not refresh:
+                driver_frame = pd.read_parquet(driver_path)
+            else:
+                payload = client.get_json(
+                    endpoint,
+                    {"session_key": session_key, "driver_number": driver_number},
+                )
+                driver_frame = make_parquet_safe(endpoint, pd.DataFrame(payload))
+                write_latest_parquet(driver_frame, driver_path)
+            location_frames.append(driver_frame)
+        frame = pd.concat(location_frames, ignore_index=True)
+    else:
+        payload = client.get_json(endpoint, {"session_key": session_key})
+        frame = make_parquet_safe(
+            endpoint,
+            pd.DataFrame(payload, columns=sorted(REQUIRED_COLUMNS[endpoint]))
+            if not payload
+            else pd.DataFrame(payload),
+        )
     _validate_source_frame(endpoint, frame, session_key)
     snapshot = _snapshot_path(raw_dir, session_key, endpoint, frame)
     latest = session_cache_path(session_key, endpoint)
@@ -427,12 +451,18 @@ def ingest_session(
     frames: dict[str, pd.DataFrame] = {}
     for endpoint in sorted(required | optional):
         try:
+            driver_numbers = None
+            if endpoint == "location" and "drivers" in frames:
+                driver_numbers = sorted(
+                    frames["drivers"]["driver_number"].astype(int).unique().tolist()
+                )
             frame, result = _load_endpoint(
                 client,
                 endpoint,
                 session_key,
                 refresh=refresh,
                 raw_dir=raw_dir,
+                driver_numbers=driver_numbers,
             )
             frames[endpoint] = frame
             endpoint_results[endpoint] = result

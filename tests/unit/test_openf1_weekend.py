@@ -246,6 +246,60 @@ class OpenF1WeekendTest(unittest.TestCase):
             self.assertIn("silver_path", partial["endpoints"]["session_result"])
             self.assertIn("silver_path", partial["endpoints"]["championship_drivers"])
 
+    def test_location_is_loaded_per_driver(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        class FakeClient:
+            def get_json(
+                    self, endpoint: str, params: dict[str, object]
+            ) -> list[dict[str, object]]:
+                calls.append((endpoint, params))
+                if endpoint == "drivers":
+                    return [
+                        {"session_key": 42, "driver_number": 1, "name_acronym": "ONE"},
+                        {"session_key": 42, "driver_number": 2, "name_acronym": "TWO"},
+                    ]
+                driver_number = int(params["driver_number"])
+                return [
+                    {
+                        "session_key": 42,
+                        "driver_number": driver_number,
+                        "date": "2026-07-26T13:00:00Z",
+                        "x": driver_number,
+                        "y": driver_number + 1,
+                        "z": 0,
+                    }
+                ]
+
+        plan = {
+            "session_id": "openf1:session:42",
+            "source_session_key": 42,
+            "normalized_session_type": "race",
+            "required_endpoints": ["drivers", "location"],
+            "optional_endpoints": [],
+            "skipped_endpoints": [],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = ingest_session(
+                plan,
+                client=FakeClient(),
+                refresh=True,
+                raw_dir=root / "raw",
+                curated_dir=root / "curated",
+            )
+
+            self.assertEqual(result["status"], "available")
+            self.assertEqual(result["endpoints"]["location"]["row_count"], 2)
+            self.assertEqual(
+                calls,
+                [
+                    ("drivers", {"session_key": 42}),
+                    ("location", {"session_key": 42, "driver_number": 1}),
+                    ("location", {"session_key": 42, "driver_number": 2}),
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

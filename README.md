@@ -59,20 +59,23 @@ Rain radar is rejected. Qualifying prediction, race prediction, strategy recomme
 
 Selecting a race weekend always loads meeting and session metadata first. Data jobs then use an explicit purpose instead of downloading every high-volume endpoint blindly:
 
-- **Replay:** load the selected completed race and its required replay endpoints.
+- **Selected session:** load only the selected session's facts; this is the lightweight dashboard default.
+- **Replay:** load the selected completed race plus the high-volume location timeline required for replay.
 - **Qualifying calculation:** load sessions completed before the target qualifying session and available by `decision_time`; the later feature contract decides which practice, sprint, weather, and tyre inputs are admissible.
 - **Race calculation:** load completed practice, qualifying, sprint, and race observations available before `decision_time`.
 - **Cross-check:** load matching FastF1 sessions when available without blocking OpenF1 processing.
 
 Sprint and changed weekend formats are discovered from session metadata; session names and counts are not hard-coded. The pipeline can ingest all discovered sessions or select a deterministic subset by repeated OpenF1 session key, canonical session type, or the intersection of both filters. Training data is therefore loaded automatically when a selected calculation requires it, but not for unrelated calendar or replay requests.
 
-The implemented `weekend` profile loads drivers, laps, stints, weather, and the applicable position, pit, interval, Race Control, result, and championship endpoints for every completed session. Practice and qualifying do not request the unavailable `intervals` endpoint. Results are optional for qualifying, sprint, and race; championship standings are optional after sprint and race.
+The implemented `weekend` profile loads drivers, laps, stints, weather, and the applicable position, pit, interval, Race Control, result, and championship endpoints. The dashboard narrows this profile to the selected session. Practice and qualifying do not request the unavailable `intervals` endpoint. Results are optional for qualifying, sprint, and race; championship standings are optional after sprint and race.
 
-`purpose=weekend_complete_v1` without session filters and with a `decision_time` after the last completed session is the dashboard's explicit complete-weekend action. It additionally persists the OpenF1 `sessions` response for every selected session and high-volume `location` for sprint and race. A reviewed or safely auto-verified circuit and one target-session weather forecast remain part of the run. Manifest-bound `sessions`, `laps`, and `location` snapshots automatically produce season-partitioned local track geometry when sufficient data exists. This V1 profile is not an all-source export: it excludes location for practice and qualifying, telemetry, a full matching FastF1 weekend, and multiple scheduled forecast vintages.
+`purpose=weekend_complete_v1` without session filters and with a `decision_time` after the last completed session is the dashboard's explicit large complete-weekend action. It additionally persists the OpenF1 `sessions` response for every selected session and high-volume `location` for sprint and race. Location is requested per driver and combined locally to avoid oversized OpenF1 responses. A reviewed or safely auto-verified circuit and one target-session weather forecast remain part of the run. Manifest-bound `sessions`, `laps`, and `location` snapshots automatically produce season-partitioned local track geometry when sufficient data exists. This V1 profile is not an all-source export: it excludes location for practice and qualifying, telemetry, a full matching FastF1 weekend, and multiple scheduled forecast vintages.
+
+The repository includes a 3.6 MiB Hungaroring demo dataset with one race, weather, results, standings, and a downsampled replay timeline. The dashboard uses it automatically when no locally ingested season data exists. Full source snapshots, full-resolution location data, generated artifacts, and caches remain excluded from Git.
 
 ## Current status
 
-Last updated: **28 August 2026**
+Last updated: **30 August 2026**
 
 ### Implemented
 
@@ -101,6 +104,8 @@ Last updated: **28 August 2026**
 - leakage-free Circle-of-Doom replay with point-in-time reference pace, causal lap progress, released stint visibility, synthetic-circle default, and optional stored geometry
 - OpenF1 pace-by-stint analysis with a separate FastF1 driver-level comparison
 - focused unit tests for validation, master data, geometry, pace, replay, session selection, result/standing ingestion, and job execution
+- bundled hash-verified Hungaroring demo data with automatic dashboard fallback
+- per-driver OpenF1 location ingestion for bounded high-volume requests
 
 ### Partly implemented
 
@@ -121,6 +126,7 @@ Last updated: **28 August 2026**
 ```text
 f1-strat/
 ├── README.md                    # Single Source of Truth
+├── demo_data/                   # Small bundled dashboard and replay dataset
 ├── config/
 │   └── reviewed_circuit_mappings.json # Reviewed OpenF1-to-Wikidata identities
 ├── docs/
@@ -137,6 +143,7 @@ f1-strat/
 │   ├── persistence.py          # Atomic file persistence and hashing
 │   ├── session_facts.py        # Canonical OpenF1 Silver facts
 │   ├── temporal.py             # Shared strict decision-time fact cut
+│   ├── demo_data.py            # Rebuild the bundled demo from local snapshots
 │   ├── job_runner.py           # Deterministic persisted weekend jobs
 │   ├── job_service.py          # Controlled HTTP boundary for dashboard jobs
 │   ├── dashboard/              # Read-only Streamlit views and read models
@@ -501,6 +508,12 @@ python -m unittest discover -s tests/unit -p "test_*.py"
 
 The commands below assume that the virtual environment is active and `PYTHONPATH` is set as shown above.
 
+The dashboard starts with the bundled Hungaroring demo on a fresh clone; no source download is required. Maintainers with the full Hungary snapshots can rebuild the committed demo deterministically:
+
+```bash
+python -m f1_pipeline.demo_data
+```
+
 Run the Hungary verification from existing snapshots when possible:
 
 ```bash
@@ -527,11 +540,13 @@ python -m f1_pipeline.sources.weekend_weather_pipeline --season 2026 --meeting-k
 
 The historical acceptance case ingests OpenF1 sessions `11335`, `11336`, `11337`, `11338`, and `11342` for meeting `1291`, Wikidata `Q171356`, and the ECMWF IFS run initialized at `2026-07-26T00:00:00Z`. Its `available_at=2026-07-26T06:00:00Z` is a conservative documented-latency policy, not an observed historical retrieval timestamp. Omitting both run arguments deterministically selects the latest 00/06/12/18 UTC cycle whose initialization plus six-hour publication allowance does not exceed `decision_time`. Use `--refresh` only to create new source and manifest versions.
 
-Load only the Hungary race facts while retaining Race `11342` as the forecast target:
+Load only the lightweight Hungary race facts while retaining Race `11342` as the forecast target:
 
 ```bash
-python -m f1_pipeline.sources.weekend_weather_pipeline --season 2026 --meeting-key 1291 --purpose replay --target-session-key 11342 --decision-time 2026-07-26T16:00:00Z --strict
+python -m f1_pipeline.sources.weekend_weather_pipeline --season 2026 --meeting-key 1291 --purpose weekend --target-session-key 11342 --decision-time 2026-07-26T16:00:00Z --include-session-key 11342 --strict
 ```
+
+Use `--purpose replay` only when the full location timeline is needed.
 
 Load all discovered practice sessions:
 

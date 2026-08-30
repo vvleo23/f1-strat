@@ -11,6 +11,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CURATED_DIR = PROJECT_ROOT / "data" / "curated"
 MANIFEST_DIR = CURATED_DIR / "manifests"
+DEMO_MANIFEST_DIR = PROJECT_ROOT / "demo_data" / "curated" / "manifests"
 MASTER_TABLES = frozenset(
     {"season", "meeting", "session", "country", "circuit", "driver", "team"}
 )
@@ -79,16 +80,35 @@ def _read_verified_parquet(path_value: str, expected_hash: str | None = None) ->
         raise DashboardDataError(f"Could not read data file {path}: {exc}") from exc
 
 
-def available_seasons(manifest_dir: Path = MANIFEST_DIR) -> tuple[int, ...]:
-    seasons: set[int] = set()
-    for path in manifest_dir.glob("master_data_*.json"):
-        try:
-            payload = _load_json(path)
-            season = int(payload["season"])
-            if payload.get("validation", {}).get("status") == "valid":
-                seasons.add(season)
-        except (DashboardDataError, KeyError, TypeError, ValueError):
+def _manifest_dirs(manifest_dir: Path | None) -> tuple[Path, ...]:
+    return (manifest_dir,) if manifest_dir is not None else (MANIFEST_DIR, DEMO_MANIFEST_DIR)
+
+
+def _season_manifest_dir(season: int, manifest_dir: Path | None) -> Path:
+    for candidate in _manifest_dirs(manifest_dir):
+        path = candidate / f"master_data_{season}.json"
+        if not path.is_file():
             continue
+        try:
+            manifest = _load_json(path)
+        except DashboardDataError:
+            continue
+        if manifest.get("validation", {}).get("status") == "valid":
+            return candidate
+    return MANIFEST_DIR if manifest_dir is None else manifest_dir
+
+
+def available_seasons(manifest_dir: Path | None = None) -> tuple[int, ...]:
+    seasons: set[int] = set()
+    for directory in _manifest_dirs(manifest_dir):
+        for path in directory.glob("master_data_*.json"):
+            try:
+                payload = _load_json(path)
+                season = int(payload["season"])
+                if payload.get("validation", {}).get("status") == "valid":
+                    seasons.add(season)
+            except (DashboardDataError, KeyError, TypeError, ValueError):
+                continue
     return tuple(sorted(seasons, reverse=True))
 
 
@@ -96,10 +116,11 @@ def load_master_table(
         season: int,
         table: str,
         *,
-        manifest_dir: Path = MANIFEST_DIR,
+        manifest_dir: Path | None = None,
 ) -> pd.DataFrame:
     if table not in MASTER_TABLES:
         raise DashboardDataError(f"Unsupported master table: {table}")
+    manifest_dir = _season_manifest_dir(season, manifest_dir)
     manifest_path = manifest_dir / f"master_data_{season}.json"
     manifest = _load_json(manifest_path)
     if manifest.get("validation", {}).get("status") != "valid":
@@ -123,8 +144,9 @@ def load_master_table(
 def load_season_catalog(
         season: int,
         *,
-        manifest_dir: Path = MANIFEST_DIR,
+        manifest_dir: Path | None = None,
 ) -> SeasonCatalog:
+    manifest_dir = _season_manifest_dir(season, manifest_dir)
     manifest_path = manifest_dir / f"master_data_{season}.json"
     return SeasonCatalog(
         season=season,
@@ -169,33 +191,34 @@ def select_session_manifest(
         session_key: int,
         required_endpoints: Iterable[str],
         *,
-        manifest_dir: Path = MANIFEST_DIR,
+        manifest_dir: Path | None = None,
 ) -> tuple[dict[str, Any], Path]:
     required = tuple(dict.fromkeys(required_endpoints))
-    candidates: list[tuple[pd.Timestamp, dict[str, Any], Path]] = []
-    session_dir = manifest_dir / "openf1_sessions"
-    for path in session_dir.glob(f"session_{session_key}_*.json"):
-        try:
-            manifest = _load_json(path)
-        except DashboardDataError:
-            continue
-        if manifest.get("status") not in READABLE_STATUSES:
-            continue
-        endpoints = manifest.get("endpoints", {})
-        if not all(
-                isinstance(endpoints.get(name), dict)
-                and endpoints[name].get("status") in READABLE_STATUSES
-                for name in required
-        ):
-            continue
-        candidates.append((_manifest_timestamp(manifest, path), manifest, path))
-    if not candidates:
-        requested = ", ".join(required) or "session metadata"
-        raise DashboardDataError(
-            f"No readable manifest for session {session_key} contains: {requested}."
-        )
-    _, manifest, path = max(candidates, key=lambda item: (item[0], item[2].name))
-    return manifest, path
+    for directory in _manifest_dirs(manifest_dir):
+        candidates: list[tuple[pd.Timestamp, dict[str, Any], Path]] = []
+        session_dir = directory / "openf1_sessions"
+        for path in session_dir.glob(f"session_{session_key}_*.json"):
+            try:
+                manifest = _load_json(path)
+            except DashboardDataError:
+                continue
+            if manifest.get("status") not in READABLE_STATUSES:
+                continue
+            endpoints = manifest.get("endpoints", {})
+            if not all(
+                    isinstance(endpoints.get(name), dict)
+                    and endpoints[name].get("status") in READABLE_STATUSES
+                    for name in required
+            ):
+                continue
+            candidates.append((_manifest_timestamp(manifest, path), manifest, path))
+        if candidates:
+            _, manifest, path = max(candidates, key=lambda item: (item[0], item[2].name))
+            return manifest, path
+    requested = ", ".join(required) or "session metadata"
+    raise DashboardDataError(
+        f"No readable manifest for session {session_key} contains: {requested}."
+    )
 
 
 def load_session_bundle(
@@ -204,7 +227,7 @@ def load_session_bundle(
         *,
         layer: str = "silver",
         optional_endpoints: Iterable[str] = (),
-        manifest_dir: Path = MANIFEST_DIR,
+        manifest_dir: Path | None = None,
 ) -> SessionBundle:
     required = tuple(dict.fromkeys(endpoints))
     optional = tuple(name for name in dict.fromkeys(optional_endpoints) if name not in required)
@@ -259,7 +282,7 @@ def load_latest_standings(
         catalog: SeasonCatalog,
         endpoint: str,
         *,
-        manifest_dir: Path = MANIFEST_DIR,
+        manifest_dir: Path | None = None,
 ) -> pd.DataFrame:
     if endpoint not in {"championship_drivers", "championship_teams"}:
         raise DashboardDataError(f"Unsupported standing endpoint: {endpoint}")
@@ -284,7 +307,7 @@ def load_latest_standings(
 def load_season_results(
         catalog: SeasonCatalog,
         *,
-        manifest_dir: Path = MANIFEST_DIR,
+        manifest_dir: Path | None = None,
 ) -> pd.DataFrame:
     race_sessions = catalog.sessions[
         catalog.sessions["status"].eq("completed")
@@ -312,34 +335,35 @@ def load_season_results(
 def load_forecast(
         session_key: int,
         *,
-        manifest_dir: Path = MANIFEST_DIR,
+        manifest_dir: Path | None = None,
 ) -> pd.DataFrame:
-    candidates: list[tuple[pd.Timestamp, Path, str | None]] = []
-    for path in manifest_dir.glob("weekend_weather_pipeline_*.json"):
-        try:
-            manifest = _load_json(path)
-        except DashboardDataError:
-            continue
-        selection = manifest.get("selection", {})
-        job = manifest.get("jobs", {}).get("open_meteo", {})
-        if (
-                selection.get("target_session_key") != session_key
-                or not isinstance(job, dict)
-                or job.get("status") not in READABLE_STATUSES
-                or not job.get("curated_path")
-        ):
-            continue
-        completed_at = pd.to_datetime(
-            str(manifest.get("completed_at", "")), utc=True, errors="coerce"
-        )
-        if not isinstance(completed_at, pd.Timestamp) or pd.isna(completed_at):
-            completed_at = pd.Timestamp(path.stat().st_mtime, unit="s", tz="UTC")
-        candidates.append(
-            (completed_at, _project_path(str(job["curated_path"])), job.get("curated_sha256"))
-        )
-    if not candidates:
-        return pd.DataFrame()
-    _, data_path, expected_hash = max(candidates, key=lambda item: item[0])
-    return _read_verified_parquet(
-        str(data_path), str(expected_hash) if expected_hash else None
-    )
+    for directory in _manifest_dirs(manifest_dir):
+        candidates: list[tuple[pd.Timestamp, Path, str | None]] = []
+        for path in directory.glob("weekend_weather_pipeline_*.json"):
+            try:
+                manifest = _load_json(path)
+            except DashboardDataError:
+                continue
+            selection = manifest.get("selection", {})
+            job = manifest.get("jobs", {}).get("open_meteo", {})
+            if (
+                    selection.get("target_session_key") != session_key
+                    or not isinstance(job, dict)
+                    or job.get("status") not in READABLE_STATUSES
+                    or not job.get("curated_path")
+            ):
+                continue
+            completed_at = pd.to_datetime(
+                str(manifest.get("completed_at", "")), utc=True, errors="coerce"
+            )
+            if not isinstance(completed_at, pd.Timestamp) or pd.isna(completed_at):
+                completed_at = pd.Timestamp(path.stat().st_mtime, unit="s", tz="UTC")
+            candidates.append(
+                (completed_at, _project_path(str(job["curated_path"])), job.get("curated_sha256"))
+            )
+        if candidates:
+            _, data_path, expected_hash = max(candidates, key=lambda item: item[0])
+            return _read_verified_parquet(
+                str(data_path), str(expected_hash) if expected_hash else None
+            )
+    return pd.DataFrame()

@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "session_key": 11342,
+  "session_id": "openf1:session:11342",
+  "session_type": "race",
+  "status": "available",
+  "required_endpoints": [
+    "sessions",
+    "drivers",
+    "laps",
+    "intervals",
+    "position",
+    "pit",
+    "stints",
+    "race_control",
+    "location"
+  ],
+  "optional_endpoints": [
+    "session_result",
+    "championship_drivers",
+    "championship_teams",
+    "weather"
+  ],
+  "skipped_endpoints": [],
+  "endpoints": {
+    "sessions": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 1,
+      "raw_path": "demo_data/raw/session_11342/sessions.parquet",
+      "raw_sha256": "f45cadb5a9eab4047cf1a00105e10a8465dc7394d7517b4a65465088c2982eaf",
+      "retrieved_at": "2026-08-30T18:21:59.494682+00:00",
+      "empty": false
+    },
+    "drivers": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 22,
+      "raw_path": "demo_data/raw/session_11342/drivers.parquet",
+      "raw_sha256": "3c8f715c53457cb69e606640d4ff3b229cf858e425ac1896ca0cb7b7f11b339b",
+      "retrieved_at": "2026-08-30T18:21:59.448577+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/drivers.parquet",
+      "silver_sha256": "b5fefed194d54dda9a078b0448012a50133d2bb9d21a19da492abc5f570a29fb",
+      "silver_row_count": 22
+    },
+    "laps": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 1423,
+      "raw_path": "demo_data/raw/session_11342/laps.parquet",
+      "raw_sha256": "165a387d25c8fbfcf2aabc78506727dd80851f4e7b0f1bb5507f7b9cd4d52a20",
+      "retrieved_at": "2026-08-30T18:21:59.503260+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/laps.parquet",
+      "silver_sha256": "b6e84b3f452e08ffd0d99c0f2d90c29d94bf5aadb174127f12a6cd579991fb3d",
+      "silver_row_count": 1423
+    },
+    "intervals": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 29593,
+      "raw_path": "demo_data/raw/session_11342/intervals.parquet",
+      "raw_sha256": "b3e4b4f09916fa29cb4c1ef63191f93b09c7f20d3edb6a95499fa5d748add002",
+      "retrieved_at": "2026-08-30T18:21:59.461058+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/intervals.parquet",
+      "silver_sha256": "063a69b4db009606853ebf33556421f7d6dfe737d28d286b27c3cc619468f607",
+      "silver_row_count": 29593
+    },
+    "position": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 536,
+      "raw_path": "demo_data/raw/session_11342/position.parquet",
+      "raw_sha256": "efeb267fc252ec8bc10a5b6cf9f4c22e717571ba116e56ad023fe4ab54fe692b",
+      "retrieved_at": "2026-08-30T18:21:59.419097+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/position.parquet",
+      "silver_sha256": "501c0d2de71131f73dde00fa625993f5b8377d64a2f53a261378db90b9a49f07",
+      "silver_row_count": 536
+    },
+    "pit": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 44,
+      "raw_path": "demo_data/raw/session_11342/pit.parquet",
+      "raw_sha256": "25ae95599a286b513824e01ce1399b608e43c3a9c8112089ba47e98c07f7ed6b",
+      "retrieved_at": "2026-08-30T18:21:59.686919+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/pit.parquet",
+      "silver_sha256": "a6c03521eda6894ab6efe69e20b9487736f3d1ed50a2fa1ad2130c0a1b77a5b7",
+      "silver_row_count": 44
+    },
+    "stints": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 67,
+      "raw_path": "demo_data/raw/session_11342/stints.parquet",
+      "raw_sha256": "97b9815a47cc05a4e8a1d9cb3cbcc0fb1950de752a2bdb9e9f709b820b61e87f",
+      "retrieved_at": "2026-08-30T18:21:59.434560+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/stints.parquet",
+      "silver_sha256": "e9d6078b808c0ede05d636f07fc2a46284527688c68502998c874146f8ffd6d8",
+      "silver_row_count": 67
+    },
+    "race_control": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 80,
+      "raw_path": "demo_data/raw/session_11342/race_control.parquet",
+      "raw_sha256": "074458b36b15391ae6ea8dd0a768e356f12fdbce903f467c17f6bd77658ac16f",
+      "retrieved_at": "2026-08-30T18:21:59.467579+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/race_control.parquet",
+      "silver_sha256": "6e40147f8c957ca09d7349732e0cf7fef539980f70c930f8aa02e9692b937bdb",
+      "silver_row_count": 80
+    },
+    "location": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 51766,
+      "raw_path": "demo_data/raw/session_11342/location.parquet",
+      "raw_sha256": "9ea80a2260873db9f3acc47a274772e06491f814a0c7f59efdfaa19e9fd6bc8c",
+      "retrieved_at": "2026-08-30T18:21:59.586168+00:00",
+      "empty": false
+    },
+    "session_result": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 22,
+      "raw_path": "demo_data/raw/session_11342/session_result.parquet",
+      "raw_sha256": "f6780aba774e2110afcd24e2913431d1ab757a9be9f37ea06c1da67a096234d6",
+      "retrieved_at": "2026-08-30T18:21:59.693229+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/session_result.parquet",
+      "silver_sha256": "454e7235372416c1870fedbc75ea950c16ae19874e1db5b60eaec75b89fcf987",
+      "silver_row_count": 22
+    },
+    "championship_drivers": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 22,
+      "raw_path": "demo_data/raw/session_11342/championship_drivers.parquet",
+      "raw_sha256": "7f9419b8594c52e7ed9dc859d3fc65bf1e85e5d40f055de1c959e60373331b64",
+      "retrieved_at": "2026-08-30T18:21:59.591769+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/championship_drivers.parquet",
+      "silver_sha256": "72ee116daf9d0ecd4d6b772a5e47e8de3487c89919178a1a6e49262e65b479b9",
+      "silver_row_count": 22
+    },
+    "championship_teams": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 11,
+      "raw_path": "demo_data/raw/session_11342/championship_teams.parquet",
+      "raw_sha256": "daa2ba0b71b237204f94464fbdcddb75a67b23869042a7dbad630319f9594bf5",
+      "retrieved_at": "2026-08-30T18:21:59.407650+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/championship_teams.parquet",
+      "silver_sha256": "cc6e33e6db0708e7049d2e632d09c8c6149260ad6abbc5d9dd44c52cabe27e54",
+      "silver_row_count": 11
+    },
+    "weather": {
+      "status": "available",
+      "fetched": false,
+      "row_count": 156,
+      "raw_path": "demo_data/raw/session_11342/weather.parquet",
+      "raw_sha256": "10e3b400151c3f8128a344accb7e86be3536c0f57189f13eed7aac130ec81a70",
+      "retrieved_at": "2026-08-30T18:21:59.675309+00:00",
+      "empty": false,
+      "silver_path": "demo_data/curated/facts/session_11342/weather.parquet",
+      "silver_sha256": "9335e37726fd93f915e4f134604366625cf9e753d0b1b5742776bdd0e557a02a",
+      "silver_row_count": 156
+    }
+  }
+}
