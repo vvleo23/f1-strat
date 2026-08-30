@@ -23,6 +23,12 @@ from f1_pipeline.temporal import TemporalCutError, cut_facts
 from f1_pipeline.weather import WeatherCutError, build_weather_cut
 
 JOB_SERVICE_URL = os.getenv("F1_JOB_SERVICE_URL", "http://127.0.0.1:8765")
+JOB_SERVICE_COMMAND = (
+    '$env:PYTHONPATH = "src"; python -m f1_pipeline.job_service'
+    if os.name == "nt"
+    else "PYTHONPATH=src python -m f1_pipeline.job_service"
+)
+JOB_SERVICE_COMMAND_LANGUAGE = "powershell" if os.name == "nt" else "bash"
 
 
 @st.cache_data(show_spinner=False)
@@ -82,7 +88,7 @@ def submit_replay_job(
         result = submit_job(JOB_SERVICE_URL, payload)
     except JobServiceError as exc:
         st.error(str(exc))
-        st.code("PYTHONPATH=src python -m f1_pipeline.job_service", language="bash")
+        st.code(JOB_SERVICE_COMMAND, language=JOB_SERVICE_COMMAND_LANGUAGE)
         return
     st.session_state["replay_job_id"] = result["job_id"]
     st.success(f"Replay data job {result['job_id']} was submitted.")

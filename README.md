@@ -475,45 +475,54 @@ Strategy output is driver-specific and should require a focus driver, optionally
 
 Python `3.14` is configured in `.python-version`.
 
+### Windows PowerShell
+
+```powershell
+py -3.14 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+$env:PYTHONPATH = "src"
+python -m unittest discover -s tests/unit -p "test_*.py"
+```
+
+If PowerShell activation is disabled, use `.\.venv\Scripts\python.exe` instead of `python`. PyCharm users can select `.venv\Scripts\python.exe` as the project interpreter and mark `src` as a Sources Root.
+
+### macOS and Linux
+
 ```bash
 python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-PYTHONPATH=src python -m unittest discover -s tests/unit -p 'test_*.py'
+export PYTHONPATH=src
+python -m unittest discover -s tests/unit -p "test_*.py"
 ```
 
 ## Usage
 
+The commands below assume that the virtual environment is active and `PYTHONPATH` is set as shown above.
+
 Run the Hungary verification from existing snapshots when possible:
 
 ```bash
-PYTHONPATH=src python -m f1_pipeline.sources.session_verification
+python -m f1_pipeline.sources.session_verification
 ```
 
 Fetch current source data and fail unless the required OpenF1 inputs are available:
 
 ```bash
-PYTHONPATH=src python -m f1_pipeline.sources.session_verification --refresh --strict
+python -m f1_pipeline.sources.session_verification --refresh --strict
 ```
 
 Load the 2026 season master data:
 
 ```bash
-PYTHONPATH=src python -m f1_pipeline.master_data --season 2026
+python -m f1_pipeline.master_data --season 2026
 ```
 
 Run the Hungary Weekend Complete V1 F1-Wikidata-Open-Meteo pipeline from existing snapshots when possible:
 
 ```bash
-PYTHONPATH=src python -m f1_pipeline.sources.weekend_weather_pipeline \
-  --season 2026 \
-  --meeting-key 1291 \
-  --purpose weekend_complete_v1 \
-  --target-session-key 11342 \
-  --decision-time 2026-07-26T16:00:00Z \
-  --run-initialized-at 2026-07-26T00:00:00Z \
-  --available-at 2026-07-26T06:00:00Z \
-  --strict
+python -m f1_pipeline.sources.weekend_weather_pipeline --season 2026 --meeting-key 1291 --purpose weekend_complete_v1 --target-session-key 11342 --decision-time 2026-07-26T16:00:00Z --run-initialized-at 2026-07-26T00:00:00Z --available-at 2026-07-26T06:00:00Z --strict
 ```
 
 The historical acceptance case ingests OpenF1 sessions `11335`, `11336`, `11337`, `11338`, and `11342` for meeting `1291`, Wikidata `Q171356`, and the ECMWF IFS run initialized at `2026-07-26T00:00:00Z`. Its `available_at=2026-07-26T06:00:00Z` is a conservative documented-latency policy, not an observed historical retrieval timestamp. Omitting both run arguments deterministically selects the latest 00/06/12/18 UTC cycle whose initialization plus six-hour publication allowance does not exceed `decision_time`. Use `--refresh` only to create new source and manifest versions.
@@ -521,26 +530,13 @@ The historical acceptance case ingests OpenF1 sessions `11335`, `11336`, `11337`
 Load only the Hungary race facts while retaining Race `11342` as the forecast target:
 
 ```bash
-PYTHONPATH=src python -m f1_pipeline.sources.weekend_weather_pipeline \
-  --season 2026 \
-  --meeting-key 1291 \
-  --purpose replay \
-  --target-session-key 11342 \
-  --decision-time 2026-07-26T16:00:00Z \
-  --strict
+python -m f1_pipeline.sources.weekend_weather_pipeline --season 2026 --meeting-key 1291 --purpose replay --target-session-key 11342 --decision-time 2026-07-26T16:00:00Z --strict
 ```
 
 Load all discovered practice sessions:
 
 ```bash
-PYTHONPATH=src python -m f1_pipeline.sources.weekend_weather_pipeline \
-  --season 2026 \
-  --meeting-key 1291 \
-  --purpose weekend \
-  --target-session-key 11342 \
-  --decision-time 2026-07-26T16:00:00Z \
-  --include-session-type practice \
-  --strict
+python -m f1_pipeline.sources.weekend_weather_pipeline --season 2026 --meeting-key 1291 --purpose weekend --target-session-key 11342 --decision-time 2026-07-26T16:00:00Z --include-session-type practice --strict
 ```
 
 Repeat `--include-session-key` or `--include-session-type` to narrow the sessions allowed by the selected purpose. When both filters are present, only their intersection is ingested. Invalid, foreign, cancelled, future, or empty selections are rejected. `--target-session-key` identifies the replay, qualifying, or race-strategy target and the session whose time horizon the forecast must cover. The older `--session-key` and `--forecast-session-key` spellings remain CLI aliases.
@@ -548,23 +544,14 @@ Repeat `--include-session-key` or `--include-session-type` to narrow the session
 Build and preview the Hungary centerline:
 
 ```bash
-PYTHONPATH=src python -m f1_pipeline.geometry --season 2026 --session-key 11342
-PYTHONPATH=src python -m f1_pipeline.geometry_preview \
-  --season 2026 \
-  --session-key 11342 \
-  --self-contained \
-  --open
+python -m f1_pipeline.geometry --season 2026 --session-key 11342
+python -m f1_pipeline.geometry_preview --season 2026 --session-key 11342 --self-contained --open
 ```
 
 Create the Hungary replay:
 
 ```bash
-PYTHONPATH=src python -m f1_pipeline.replay.circle_of_doom \
-  --session-key 11342 \
-  --driver VER \
-  --decision-time 2026-07-26T16:00:00Z \
-  --self-contained \
-  --output data/artifacts/circle_of_doom_hungary_2026.html
+python -m f1_pipeline.replay.circle_of_doom --session-key 11342 --driver VER --decision-time 2026-07-26T16:00:00Z --self-contained --output data/artifacts/circle_of_doom_hungary_2026.html
 ```
 
 Add `--geometry-mode stored` to render stored geometry instead of the default synthetic circle. Resolution uses the exact session, then the same meeting, then the latest matching circuit in that season, then the legacy 2026 table, and finally the synthetic circle. An earlier `--decision-time` creates a partial replay whose last frame cannot exceed that UTC cutoff.
@@ -572,7 +559,7 @@ Add `--geometry-mode stored` to render stored geometry instead of the default sy
 Build the pace analysis without fetching new data:
 
 ```bash
-PYTHONPATH=src python -m f1_pipeline.analysis.pace --session-key 11342
+python -m f1_pipeline.analysis.pace --session-key 11342
 ```
 
 Generated verification JSON, replay HTML, geometry previews, and analysis files are written below `data/artifacts/`. They are reproducible outputs, not source data.
@@ -581,10 +568,10 @@ Start the controlled local job service and the read-only dashboard from the repo
 
 ```bash
 # Terminal 1
-PYTHONPATH=src python -m f1_pipeline.job_service
+python -m f1_pipeline.job_service
 
 # Terminal 2
-PYTHONPATH=src streamlit run src/f1_pipeline/dashboard/app.py
+python -m streamlit run src/f1_pipeline/dashboard/app.py
 ```
 
 The CLI and local service use the same weekend orchestrator. Job status is persisted, but there is no delayed retry scheduler or automatic finalization yet.

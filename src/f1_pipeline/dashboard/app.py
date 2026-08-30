@@ -19,6 +19,12 @@ from f1_pipeline.dashboard.read_models import (
 )
 
 JOB_SERVICE_URL = os.getenv("F1_JOB_SERVICE_URL", "http://127.0.0.1:8765")
+JOB_SERVICE_COMMAND = (
+    '$env:PYTHONPATH = "src"; python -m f1_pipeline.job_service'
+    if os.name == "nt"
+    else "PYTHONPATH=src python -m f1_pipeline.job_service"
+)
+JOB_SERVICE_COMMAND_LANGUAGE = "powershell" if os.name == "nt" else "bash"
 
 
 @st.cache_data(show_spinner=False)
@@ -42,8 +48,8 @@ def _submit(payload: dict[str, Any]) -> None:
     except JobServiceError as exc:
         st.error(str(exc))
         st.code(
-            "PYTHONPATH=src python -m f1_pipeline.job_service",
-            language="bash",
+            JOB_SERVICE_COMMAND,
+            language=JOB_SERVICE_COMMAND_LANGUAGE,
         )
         return
     st.session_state["job_id"] = result["job_id"]
