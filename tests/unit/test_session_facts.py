@@ -128,8 +128,22 @@ class SessionFactsTest(unittest.TestCase):
                 }
             ]
         )
+        starting_grid = pd.DataFrame(
+            [
+                {
+                    "session_key": 42,
+                    "meeting_key": 7,
+                    "driver_number": 1,
+                    "position": 2,
+                    "lap_duration": 75.321,
+                }
+            ]
+        )
 
         _, result_facts = normalize_session_fact("session_result", results, **metadata)
+        _, grid_facts = normalize_session_fact(
+            "starting_grid", starting_grid, **metadata
+        )
         _, driver_facts = normalize_session_fact(
             "championship_drivers", driver_standing, **metadata
         )
@@ -144,6 +158,8 @@ class SessionFactsTest(unittest.TestCase):
         self.assertEqual(result_facts.iloc[1]["laps_behind"], 1)
         self.assertTrue(result_facts.iloc[1]["dnf"])
         self.assertFalse(result_facts.iloc[0]["dns"])
+        self.assertEqual(grid_facts.iloc[0]["grid_position"], 2)
+        self.assertEqual(grid_facts.iloc[0]["qualifying_lap_seconds"], 75.321)
         self.assertEqual(driver_facts.iloc[0]["points_current"], 115.5)
         self.assertEqual(team_facts.iloc[0]["team_id"], "openf1:team:example-racing")
         self.assertTrue(

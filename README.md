@@ -67,7 +67,7 @@ Selecting a race weekend always loads meeting and session metadata first. Data j
 
 Sprint and changed weekend formats are discovered from session metadata; session names and counts are not hard-coded. The pipeline can ingest all discovered sessions or select a deterministic subset by repeated OpenF1 session key, canonical session type, or the intersection of both filters. Training data is therefore loaded automatically when a selected calculation requires it, but not for unrelated calendar or replay requests.
 
-The implemented `weekend` profile loads drivers, laps, stints, weather, and the applicable position, pit, interval, Race Control, result, and championship endpoints. The dashboard narrows this profile to the selected session. Practice and qualifying do not request the unavailable `intervals` endpoint. Results are optional for qualifying, sprint, and race; championship standings are optional after sprint and race.
+The implemented `weekend` profile loads drivers, laps, stints, weather, and the applicable position, pit, interval, Race Control, starting-grid, result, and championship endpoints. The dashboard narrows this profile to the selected session. Practice and qualifying do not request the unavailable `intervals` endpoint. Starting grids are optional for races, results are optional for qualifying, sprint, and race, and championship standings are optional after sprint and race.
 
 `purpose=weekend_complete_v1` without session filters and with a `decision_time` after the last completed session is the dashboard's explicit large complete-weekend action. It additionally persists the OpenF1 `sessions` response for every selected session and high-volume `location` for sprint and race. Location is requested per driver and combined locally to avoid oversized OpenF1 responses. A reviewed or safely auto-verified circuit and one target-session weather forecast remain part of the run. Manifest-bound `sessions`, `laps`, and `location` snapshots automatically produce season-partitioned local track geometry when sufficient data exists. This V1 profile is not an all-source export: it excludes location for practice and qualifying, telemetry, a full matching FastF1 weekend, and multiple scheduled forecast vintages.
 
@@ -97,7 +97,7 @@ Last updated: **30 August 2026**
 - central point-in-time weather cut selecting one available forecast vintage and only already available track observations
 - reusable strict fact cut requiring both `event_time <= decision_time` and `available_at <= decision_time`
 - immutable OpenF1 endpoint snapshots, session manifests, and a combined weekend-facts manifest
-- canonical Silver `session_entry`, `lap`, `interval`, `position`, `pit_stop`, `stint`, `race_control_event`, `weather_observation`, `session_result`, `driver_championship_standing`, and `team_championship_standing` facts
+- canonical Silver `session_entry`, `lap`, `interval`, `position`, `pit_stop`, `stint`, `race_control_event`, `weather_observation`, `starting_grid`, `session_result`, `driver_championship_standing`, and `team_championship_standing` facts
 - read-only Streamlit season overview and session replay backed by manifest-selected, hash-verified curated data
 - separate local HTTP job service with deterministic intents and persisted status for selected-session and Weekend Complete V1 actions
 - automatic manifest-bound local centerlines in season-partitioned geometry dimensions
@@ -329,10 +329,10 @@ erDiagram
 
 Source identities remain visible in stable IDs such as `openf1:session:11342`. Current session data stays source-shaped in Bronze:
 
-- OpenF1: laps, intervals, positions, locations, pit stops, stints, weather, race control, session results, and championship standings
+- OpenF1: laps, intervals, positions, locations, pit stops, stints, weather, race control, starting grids, session results, and championship standings
 - FastF1: laps and observed weather
 
-Implemented Silver facts cover session entries, laps, intervals, positions, pit stops, stints, Race Control events, weather observations, forecast snapshots, session results, driver championship standings, and team championship standings. Standings and results remain source-identifiable facts rather than fields added to driver or team dimensions.
+Implemented Silver facts cover session entries, laps, intervals, positions, pit stops, stints, Race Control events, weather observations, forecast snapshots, starting grids, session results, driver championship standings, and team championship standings. Standings and results remain source-identifiable facts rather than fields added to driver or team dimensions.
 
 The `circuit` dimension retains a Wikidata entity ID, WGS84 latitude and longitude, coordinate revision, retrieval time, raw evidence, hash, and verification status. Manually reviewed identities come from `config/reviewed_circuit_mappings.json` and always take precedence. Unknown circuits trigger one bounded name search and entity retrieval. Exactly one candidate must match the normalized OpenF1 circuit name or location, country, racing-circuit description, one non-deprecated Earth `P625`, and valid coordinate ranges. It is then atomically written to `data/curated/registries/auto_wikidata_circuit_mappings.json`; search and entity evidence remain immutable. Multiple or invalid candidates remain `partial` and never supply weather coordinates. Both registry hashes enter the run identity. Wikidata coordinates are weather reference points; OpenF1 local centerlines remain separate display geometry.
 
@@ -401,7 +401,7 @@ The provider API or library is outside the project data lake. **Bronze, or Stage
 | OpenF1 `race_control` | Timestamped flags, categories and messages | Re-live event feed and track-status triggers | Primary; facts and replay panel implemented |
 | OpenF1 `weather` | Timestamped track observations | Weather cut, forecast evaluation and later re-live context | Primary observation; implemented |
 | OpenF1 `location` | Timestamped local `x/y/z` vehicle coordinates | Circle/track replay progress and season-partitioned Silver local centerline | Primary display input; automatic for ingested sprint/race sessions |
-| OpenF1 `session_result`, `championship_drivers`, `championship_teams` | Classification, points, gaps and championship ranks | Session results, latest standings, wins and podium summaries | Primary; Bronze and Silver persistence implemented |
+| OpenF1 `starting_grid`, `session_result`, `championship_drivers`, `championship_teams` | Grid, classification, points, gaps and championship ranks | Grid-to-finish changes, session results, latest standings, wins and podium summaries | Primary; Bronze and Silver persistence implemented |
 | FastF1 laps, tyres and weather | Hungary race laps and observed weather Parquet | Separate driver-level pace and source cross-check | Cross-check; partly implemented |
 | FastF1 telemetry | Not loaded; telemetry is currently disabled | Possible later speed, throttle, brake, gear and RPM analysis | Planned, with no current consumer |
 | Open-Meteo Single Run | Model run, hourly values, units, grid and request evidence | Point-in-time forecast for replay, qualifying and strategy | Primary forecast; Hungary implemented, wider capture planned |
@@ -413,21 +413,21 @@ OpenF1 `location.x/y/z` is not a geographic track map. The stored track view is 
 
 Dashboard V1 uses Streamlit with Plotly because it matches the Python and Parquet stack. It remains a small read-only consumer of curated data and artifacts: no source requests, snapshot writes, orchestration, or model fitting occur inside UI code. Data actions submit intents to the separate local job service. Calculation Snapshots and strategy outputs will be added only after their pipeline services exist.
 
-The implemented overview contains the season calendar and session selector, results, driver and team standings, wins, podiums, and small summary tables. The replay view contains driver order and positions, the race on the stored track layout, point-in-time weather, and Race Control events. Strategy recommendation, pit window, assumptions, and alternatives remain planned. Complex custom visualizations remain excluded from Dashboard V1.
+The Analysis Dashboard is the single entry point. It shows every race weekend in the selected season as a calendar card with its discovered practice, sprint, qualifying, and race sessions. Manifest-backed states distinguish locally loaded, not-yet-loaded, and not-yet-available sessions. Selecting a Grand Prix opens a local weekend overview with the data-derived season round, compact session/coordinate/weather states, a stored-track preview when present, qualifying and race result tables when available, and a complete-weekend load intent. Qualifying gaps use the last session segment reached by each driver; race gaps preserve seconds, lap deficits, DNF, DNS, and DSQ from the normalized result. Classified race positions also show the change from the qualifying result with green gain, red loss, and grey unchanged indicators; unclassified results remain `NC`. Session dialogs submit lightweight loads, confirm explicit reloads, and open Re-Live; Re-Live automatically submits its data intent when required local snapshots are missing. The project name is the persistent home control. Driver and constructor standings are displayed side by side below the calendar; the driver table includes numbers, wins, and podiums. Standings progression, teammate comparison, grid-to-finish extremes, and fastest valid stationary stops use only locally loaded facts and expose their race and row coverage. The internal replay view contains driver order and positions, the session on the stored track layout, point-in-time weather, and Race Control events. Qualifying Prediction, Race Strategy, pit windows, assumptions, and alternatives remain planned and disabled.
 
-### Two-page V1 and post-V1 extensions
+### Dashboard V1 and post-V1 extensions
 
 | Product area | Available in V1 | Post-V1 extensions or operational gaps |
 |---|---|---|
-| Page 1 — season overview | Read-only season, meeting and session selection; results, standings, wins and podiums | Calculation history and qualifying/race outputs |
-| Year/weekend/session selection | Dashboard controls, generic planner, validated CLI filters, and persisted job status | Delayed scheduling and automatic finalization |
+| Analysis Dashboard | Read-only season calendar cards, manifest-backed session states, standings, wins and podiums | Calculation history and qualifying/race outputs |
+| Year/weekend/session selection | Season control, discovered weekend cards, local weekend and session dialogs, validated CLI filters, and persisted job status | Delayed scheduling and automatic finalization |
 | Purpose-based loading | `weekend`, `weekend_complete_v1`, `replay`, `qualifying_prediction`, and `race_strategy` session plans; session-type endpoint profiles | Feature-level endpoint plans across all sources and automatic finalization |
-| Complete-weekend action | Dashboard hand-off to a deterministic local job service and `weekend_complete_v1` | Full matching FastF1 weekend, multiple forecast vintages, and retry queue |
+| Complete-weekend state | Red weekend-card frame when all discovered sessions have local data; `weekend_complete_v1` remains available through the service and CLI | Full matching FastF1 weekend, multiple forecast vintages, and retry queue |
 | Qualifying calculation | Practice/session laps, stints, compounds and weather inputs | Leakage-free features, baseline/model, full classification, calibrated Top-15/10/3 probabilities and teammate comparison |
-| Page 2 — session re-live | Integrated Streamlit page with Circle-of-Doom/stored centerline, reconstructed order, gaps, point-in-time weather and Race Control | Reusable central data cut, persisted race-state service, and later calculation panels |
+| Session Re-Live | Internal view opened only from a calendar session, with Circle-of-Doom/stored centerline, reconstructed order, available gaps, point-in-time weather and Race Control | Reusable central data cut, persisted race-state service, and later calculation panels |
 | Strategy recommendation | Pit, stint, interval, position, weather and race-state inputs | Versioned algorithm, pit window, alternatives, uncertainty and Calculation Snapshots |
 
-The “load selected session” and “load complete weekend V1” controls hand a deterministic job intent to a separate local HTTP service. The dashboard process itself remains read-only: it does not call providers, write snapshots, or execute the pipeline, and it only observes job status, curated data, manifests, and artifacts. The service persists job state but is not a delayed scheduler or distributed queue.
+The session-dialog Load Data and Re-Live controls hand deterministic job intents to a separate local HTTP service. Re-loading existing local data requires confirmation and sets `refresh=true`. The dashboard process itself remains read-only: it does not call providers, write snapshots, or execute the pipeline, and it only observes job status, curated data, manifests, and artifacts. The service persists job state but is not a delayed scheduler or distributed queue.
 
 ### Dashboard job-control flow
 

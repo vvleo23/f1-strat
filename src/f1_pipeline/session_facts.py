@@ -20,6 +20,7 @@ FACT_NAMES = {
     "stints": "stint",
     "race_control": "race_control_event",
     "weather": "weather_observation",
+    "starting_grid": "starting_grid",
     "session_result": "session_result",
     "championship_drivers": "driver_championship_standing",
     "championship_teams": "team_championship_standing",
@@ -240,6 +241,20 @@ def normalize_session_fact(
             availability_basis="observed_retrieval",
         )
 
+    if endpoint == "starting_grid":
+        result["meeting_id"] = _numeric(frame, "meeting_key").astype("Int64").map(
+            lambda value: None if pd.isna(value) else f"openf1:meeting:{int(value)}"
+        )
+        result["grid_position"] = _numeric(frame, "position").astype("Int64")
+        result["qualifying_lap_seconds"] = _numeric(frame, "lap_duration")
+        return fact_name, _finalize(
+            result,
+            fact_name=fact_name,
+            source_keys=["session_id", "driver_number"],
+            event_time=pd.Series(retrieved_at, index=result.index),
+            availability_basis="observed_retrieval",
+        )
+
     if endpoint == "session_result":
         result["meeting_id"] = _numeric(frame, "meeting_key").astype("Int64").map(
             lambda value: None if pd.isna(value) else f"openf1:meeting:{int(value)}"
@@ -444,4 +459,3 @@ def normalize_session_fact(
         source_keys=["session_id", "source_event_time"],
         event_time=event_time,
     )
-

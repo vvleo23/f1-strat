@@ -25,6 +25,16 @@ from f1_pipeline.replay.circle_of_doom import (
     create_figure,
 )
 
+REPLAY_REQUIRED_ENDPOINTS = (
+    "sessions",
+    "drivers",
+    "laps",
+    "position",
+    "stints",
+    "location",
+)
+REPLAY_OPTIONAL_ENDPOINTS = ("intervals", "pit", "race_control")
+
 
 @dataclass(frozen=True)
 class ReplayView:
@@ -38,7 +48,29 @@ class ReplayView:
 
 
 def replay_bundle(session_key: int) -> SessionBundle:
-    return load_session_bundle(session_key, DATASET_ENDPOINTS, layer="raw")
+    bundle = load_session_bundle(
+        session_key,
+        REPLAY_REQUIRED_ENDPOINTS,
+        layer="raw",
+        optional_endpoints=REPLAY_OPTIONAL_ENDPOINTS,
+    )
+    frames = dict(bundle.frames)
+    empty_columns = {
+        "intervals": ("date", "driver_number", "gap_to_leader", "interval"),
+        "pit": ("date", "driver_number", "lap_number"),
+        "race_control": ("date", "message", "category", "flag"),
+    }
+    for endpoint in DATASET_ENDPOINTS:
+        if endpoint not in frames and endpoint in empty_columns:
+            frames[endpoint] = pd.DataFrame(columns=empty_columns[endpoint])
+    return SessionBundle(
+        session_key=bundle.session_key,
+        status=bundle.status,
+        frames=frames,
+        manifest=bundle.manifest,
+        manifest_path=bundle.manifest_path,
+        missing=bundle.missing,
+    )
 
 
 def final_reconstructed_positions(replay: ReplayResult) -> pd.DataFrame:

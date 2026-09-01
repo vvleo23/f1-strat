@@ -44,6 +44,20 @@ class SessionBundle:
     missing: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class SessionDataState:
+    session_key: int
+    status: str
+    endpoints: frozenset[str]
+    raw_endpoints: frozenset[str]
+    raw_endpoint_sets: tuple[frozenset[str], ...]
+    manifest_path: Path | None
+
+    @property
+    def loaded(self) -> bool:
+        return bool(self.endpoints)
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -158,6 +172,76 @@ def load_season_catalog(
         teams=load_master_table(season, "team", manifest_dir=manifest_dir),
         manifest_path=manifest_path,
     )
+
+
+def load_session_data_states(
+        session_keys: Iterable[int],
+        *,
+        manifest_dir: Path | None = None,
+) -> dict[int, SessionDataState]:
+    requested = {int(value) for value in session_keys}
+    states = {
+        session_key: SessionDataState(
+            session_key=session_key,
+            status="not_loaded",
+            endpoints=frozenset(),
+            raw_endpoints=frozenset(),
+            raw_endpoint_sets=(),
+            manifest_path=None,
+        )
+        for session_key in requested
+    }
+    remaining = set(requested)
+    for directory in _manifest_dirs(manifest_dir):
+        candidates: dict[int, list[tuple[pd.Timestamp, dict[str, Any], Path]]] = {}
+        session_dir = directory / "openf1_sessions"
+        for path in session_dir.glob("session_*_*.json"):
+            try:
+                manifest = _load_json(path)
+                session_key = int(manifest.get("session_key"))
+            except (DashboardDataError, TypeError, ValueError):
+                continue
+            if session_key not in remaining or manifest.get("status") not in READABLE_STATUSES:
+                continue
+            candidates.setdefault(session_key, []).append(
+                (_manifest_timestamp(manifest, path), manifest, path)
+            )
+        for session_key, choices in candidates.items():
+            _, latest_manifest, latest_path = max(
+                choices, key=lambda item: (item[0], item[2].name)
+            )
+            endpoints: set[str] = set()
+            raw_endpoints: set[str] = set()
+            raw_endpoint_sets: list[frozenset[str]] = []
+            for _, manifest, _ in choices:
+                manifest_raw_endpoints: set[str] = set()
+                for name, result in manifest.get("endpoints", {}).items():
+                    if (
+                            not isinstance(result, dict)
+                            or result.get("status") not in READABLE_STATUSES
+                    ):
+                        continue
+                    silver_path = result.get("silver_path")
+                    raw_path = result.get("raw_path")
+                    if silver_path and _project_path(str(silver_path)).is_file():
+                        endpoints.add(str(name))
+                    if raw_path and _project_path(str(raw_path)).is_file():
+                        endpoints.add(str(name))
+                        raw_endpoints.add(str(name))
+                        manifest_raw_endpoints.add(str(name))
+                if manifest_raw_endpoints:
+                    raw_endpoint_sets.append(frozenset(manifest_raw_endpoints))
+            if endpoints:
+                states[session_key] = SessionDataState(
+                    session_key=session_key,
+                    status=str(latest_manifest["status"]),
+                    endpoints=frozenset(endpoints),
+                    raw_endpoints=frozenset(raw_endpoints),
+                    raw_endpoint_sets=tuple(raw_endpoint_sets),
+                    manifest_path=latest_path,
+                )
+                remaining.remove(session_key)
+    return states
 
 
 def source_session_key(session_id: Any) -> int:
@@ -304,6 +388,38 @@ def load_latest_standings(
     return pd.DataFrame()
 
 
+def load_standings_history(
+        catalog: SeasonCatalog,
+        endpoint: str,
+        *,
+        manifest_dir: Path | None = None,
+) -> pd.DataFrame:
+    if endpoint not in {"championship_drivers", "championship_teams"}:
+        raise DashboardDataError(f"Unsupported standing endpoint: {endpoint}")
+    race_sessions = catalog.sessions[
+        catalog.sessions["status"].eq("completed")
+        & catalog.sessions["session_type"].astype(str).str.casefold().eq("race")
+    ].sort_values("scheduled_end_utc")
+    frames: list[pd.DataFrame] = []
+    for session_id in race_sessions["session_id"]:
+        session_key = source_session_key(session_id)
+        try:
+            frame = load_session_bundle(
+                session_key,
+                (endpoint,),
+                manifest_dir=manifest_dir,
+            ).frames[endpoint]
+        except DashboardDataError:
+            continue
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    entity_column = "driver_number" if endpoint == "championship_drivers" else "team_name"
+    return pd.concat(frames, ignore_index=True).drop_duplicates(
+        ["session_id", entity_column], keep="last"
+    )
+
+
 def load_season_results(
         catalog: SeasonCatalog,
         *,
@@ -315,6 +431,34 @@ def load_season_results(
         ]
     frames: list[pd.DataFrame] = []
     for session_id in race_sessions["session_id"]:
+        session_key = source_session_key(session_id)
+        try:
+            frame = load_session_bundle(
+                session_key,
+                ("session_result",),
+                manifest_dir=manifest_dir,
+            ).frames["session_result"]
+        except DashboardDataError:
+            continue
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True).drop_duplicates(
+        ["session_id", "driver_number"], keep="last"
+    )
+
+
+def load_qualifying_results(
+        catalog: SeasonCatalog,
+        *,
+        manifest_dir: Path | None = None,
+) -> pd.DataFrame:
+    qualifying_sessions = catalog.sessions[
+        catalog.sessions["status"].eq("completed")
+        & catalog.sessions["session_name"].astype(str).str.casefold().eq("qualifying")
+    ]
+    frames: list[pd.DataFrame] = []
+    for session_id in qualifying_sessions["session_id"]:
         session_key = source_session_key(session_id)
         try:
             frame = load_session_bundle(

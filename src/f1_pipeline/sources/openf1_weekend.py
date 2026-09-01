@@ -34,6 +34,7 @@ ENDPOINTS = (
     "race_control",
     "weather",
     "location",
+    "starting_grid",
     "session_result",
     "championship_drivers",
     "championship_teams",
@@ -66,7 +67,12 @@ OPTIONAL_BY_SESSION_TYPE = {
         {"pit", "session_result", "championship_drivers", "championship_teams"}
     ),
     "race": frozenset(
-        {"session_result", "championship_drivers", "championship_teams"}
+        {
+            "starting_grid",
+            "session_result",
+            "championship_drivers",
+            "championship_teams",
+        }
     ),
 }
 ALLOW_EMPTY = frozenset({"intervals", "pit", "race_control"})
@@ -81,6 +87,7 @@ REQUIRED_COLUMNS = {
     "race_control": {"session_key", "date", "message"},
     "weather": {"session_key", "date"},
     "location": {"session_key", "driver_number", "date", "x", "y", "z"},
+    "starting_grid": {"session_key", "meeting_key", "driver_number", "position"},
     "session_result": {"session_key", "meeting_key", "driver_number", "position"},
     "championship_drivers": {
         "session_key",
@@ -108,6 +115,7 @@ KEY_COLUMNS = {
     "race_control": ("session_key", "date", "message"),
     "weather": ("session_key", "date"),
     "location": ("session_key", "driver_number", "date"),
+    "starting_grid": ("session_key", "driver_number"),
     "session_result": ("session_key", "driver_number"),
     "championship_drivers": ("session_key", "driver_number"),
     "championship_teams": ("session_key", "team_name"),
@@ -123,6 +131,7 @@ DATETIME_COLUMNS = {
     "race_control": ("date",),
     "weather": ("date",),
     "location": ("date",),
+    "starting_grid": (),
     "session_result": (),
     "championship_drivers": (),
     "championship_teams": (),
@@ -154,6 +163,13 @@ NUMERIC_COLUMNS = {
         "wind_direction",
     ),
     "location": ("session_key", "driver_number", "x", "y", "z"),
+    "starting_grid": (
+        "session_key",
+        "meeting_key",
+        "driver_number",
+        "position",
+        "lap_duration",
+    ),
     "session_result": (
         "session_key",
         "meeting_key",
@@ -191,6 +207,7 @@ REQUIRED_NON_NULL = {
     "race_control": ("session_key", "date", "message"),
     "weather": ("session_key", "date"),
     "location": ("session_key", "driver_number", "date", "x", "y", "z"),
+    "starting_grid": ("session_key", "meeting_key", "driver_number", "position"),
     "session_result": ("session_key", "meeting_key", "driver_number"),
     "championship_drivers": (
         "session_key",

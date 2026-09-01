@@ -423,12 +423,23 @@ def reconstruct_absolute_gaps(
         if math.isfinite(absolute_gap):
             previous_gap = absolute_gap
 
-    finite_records = [record for record in records if math.isfinite(record["absolute_gap"])]
-    finite_records.sort(key=lambda row: (row["absolute_gap"], int(row["driver_number"])))
-    for derived_position, record in enumerate(finite_records, start=1):
+    ordered_records = [
+        record
+        for record in records
+        if math.isfinite(record["absolute_gap"])
+        or as_finite_float(record.get("position")) is not None
+    ]
+    ordered_records.sort(
+        key=lambda row: (
+            as_finite_float(row.get("position")) or math.inf,
+            row["absolute_gap"] if math.isfinite(row["absolute_gap"]) else math.inf,
+            int(row["driver_number"]),
+        )
+    )
+    for derived_position, record in enumerate(ordered_records, start=1):
         raw_position = as_finite_float(record.get("position"))
         record["resolved_position"] = int(raw_position) if raw_position else derived_position
-    return finite_records
+    return ordered_records
 
 
 def project_pit_exit(
@@ -588,20 +599,25 @@ def _prepare_asof_grid(
     grid = grid.sort_values(["date", "driver_number"]).reset_index(drop=True)
 
     intervals = datasets["intervals"].copy()
-    intervals["observed_at"] = parse_openf1_datetimes(intervals["date"])
-    intervals["driver_number"] = intervals["driver_number"].astype(int)
-    intervals = intervals[
-        ["observed_at", "driver_number", "gap_to_leader", "interval"]
-    ].drop_duplicates(["observed_at", "driver_number"], keep="last")
-    intervals = intervals.sort_values(["observed_at", "driver_number"])
-    grid = pd.merge_asof(
-        grid,
-        intervals,
-        left_on="date",
-        right_on="observed_at",
-        by="driver_number",
-        direction="backward",
-    )
+    if intervals.empty:
+        grid["observed_at"] = pd.NaT
+        grid["gap_to_leader"] = pd.NA
+        grid["interval"] = pd.NA
+    else:
+        intervals["observed_at"] = parse_openf1_datetimes(intervals["date"])
+        intervals["driver_number"] = intervals["driver_number"].astype(int)
+        intervals = intervals[
+            ["observed_at", "driver_number", "gap_to_leader", "interval"]
+        ].drop_duplicates(["observed_at", "driver_number"], keep="last")
+        intervals = intervals.sort_values(["observed_at", "driver_number"])
+        grid = pd.merge_asof(
+            grid,
+            intervals,
+            left_on="date",
+            right_on="observed_at",
+            by="driver_number",
+            direction="backward",
+        )
     # OpenF1 sometimes repeats unchanged gaps only after roughly one lap
     # (for example, 0 s for the leader). The last value known from the past
     # therefore remains valid. Higher-frequency location data independently
@@ -617,6 +633,8 @@ def _prepare_asof_grid(
         direction="backward",
         tolerance=timedelta(seconds=max_staleness_seconds),
     )
+    if intervals.empty:
+        grid["observed_at"] = grid["location_at"]
 
     positions = datasets["position"].copy()
     positions["position_at"] = parse_openf1_datetimes(positions["date"])
@@ -867,6 +885,8 @@ def build_replay(
                 displayed_gap = raw_gap.upper()
             elif record["absolute_gap"] == 0:
                 displayed_gap = "LEADER"
+            elif not math.isfinite(record["absolute_gap"]):
+                displayed_gap = "UNAVAILABLE"
             else:
                 displayed_gap = f"+{record['absolute_gap']:.1f}s"
 
@@ -897,6 +917,7 @@ def build_replay(
         projection = (
             project_pit_exit(cars, focus_driver, pit_loss, reference_lap_time)
             if reference_lap_time is not None
+            and all(math.isfinite(car.absolute_gap) for car in cars)
             else None
         )
         lap_number = max((car.lap_number for car in cars), default=1)

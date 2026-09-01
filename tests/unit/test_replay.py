@@ -273,6 +273,31 @@ class CircleOfDoomTest(unittest.TestCase):
         final_focus = next(car for car in replay.frames[-1].cars if car.driver_number == 2)
         self.assertEqual(final_focus.absolute_gap, 30.0)
 
+    def test_build_replay_keeps_drivers_when_intervals_are_unavailable(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
+        finish = cast(pd.Timestamp, start + timedelta(seconds=120))
+        datasets = self._datasets(start, finish)
+        datasets["intervals"] = pd.DataFrame(
+            columns=["date", "driver_number", "gap_to_leader", "interval"]
+        )
+
+        replay = build_replay(
+            datasets,
+            focus_driver=2,
+            green_pit_loss=20.0,
+            neutralized_pit_loss=12.0,
+            frame_seconds=10,
+            max_staleness_seconds=5,
+        )
+
+        final = replay.frames[-1]
+        self.assertEqual({car.driver_number for car in final.cars}, {1, 2, 3})
+        self.assertEqual(
+            {car.displayed_gap for car in final.cars if car.position > 1},
+            {"UNAVAILABLE"},
+        )
+        self.assertIsNone(final.projection)
+
     def test_replay_cut_is_unchanged_by_future_laps_locations_and_stints(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
         finish = cast(pd.Timestamp, start + timedelta(seconds=120))

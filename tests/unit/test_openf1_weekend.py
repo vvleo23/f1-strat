@@ -59,6 +59,7 @@ class OpenF1WeekendTest(unittest.TestCase):
         self.assertIn("intervals", plans[0]["skipped_endpoints"])
         self.assertIn("session_result", plans[1]["optional_endpoints"])
         self.assertIn("pit", plans[-1]["required_endpoints"])
+        self.assertIn("starting_grid", plans[-1]["optional_endpoints"])
         self.assertIn("session_result", plans[-1]["optional_endpoints"])
         self.assertIn("championship_drivers", plans[-1]["optional_endpoints"])
         self.assertIn("championship_teams", plans[-1]["optional_endpoints"])
