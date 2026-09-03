@@ -46,14 +46,14 @@ flowchart LR
 | Capability | Intended output | Phase | Current status |
 |---|---|---|---|
 | Race-weekend pipeline | Selected meeting, discovered sessions, snapshots, manifests, retries, and finalization | Pipeline MVP | Generic purpose planner, Weekend Complete V1, and controlled job service implemented; scheduling planned |
-| Historical event replay | Chronological race state for historical visualization | Pipeline and Dashboard V1 | Implemented; strict prediction boundary remains post-V1 work |
+| Historical event replay | Chronological race state for historical visualization | Pipeline and Dashboard V1 | Implemented with synchronized Re-Live panels and a strict prediction boundary |
 | Weather pipeline | Immutable Open-Meteo forecasts plus separate OpenF1/FastF1 observations | Pipeline MVP | Generic circuit-reference path implemented; forecast coverage depends on provider availability |
 | Season overview | Calendar, sessions, driver/team standings, wins, and podium counts | Dashboard V1 | Implemented from curated OpenF1 facts |
 | Qualifying calculation | Full predicted classification plus per-driver Top-15/Top-10/Top-3 probabilities and teammate comparison | Later analysis | Planned |
 | Race calculation | Online strategy and pit-window recommendations from the current replay state | Post-V1 analysis | Planned |
-| Dashboard | Small read-only view of curated data, results, standings, replay, weather, and Race Control | Dashboard V1 | Season overview and replay implemented |
+| Dashboard | Small read-only view of curated data, results, standings, replay, weather, and Race Control | Dashboard V1 | Season overview and single-screen Re-Live implemented |
 
-Rain radar is rejected. Qualifying prediction, race prediction, strategy recommendation, and pit-window calculation are not Pipeline and Dashboard V1 requirements. The existing Circle-of-Doom code remains a replay, regression, and research artifact; its hypothetical pit projection is not shown in Dashboard V1.
+Rain radar is rejected. Qualifying prediction, race prediction, strategy recommendation, and pit-window calculation are not Pipeline and Dashboard V1 requirements. Circle of Doom shows a transparent immediate-stop projection for the selected driver only when a configured circuit average and current green-flag gaps are available. It is an assumption, not a strategy recommendation.
 
 ## Weekend loading policy
 
@@ -128,7 +128,8 @@ f1-strat/
 ├── README.md                    # Single Source of Truth
 ├── demo_data/                   # Small bundled dashboard and replay dataset
 ├── config/
-│   └── reviewed_circuit_mappings.json # Reviewed OpenF1-to-Wikidata identities
+│   ├── reviewed_circuit_mappings.json # Reviewed OpenF1-to-Wikidata identities
+│   └── pit_loss_seconds.json          # Editable circuit-average pit losses
 ├── docs/
 │   ├── projektdokumentation.md # German project report
 │   ├── sources/                # One English card per external source
@@ -411,9 +412,9 @@ OpenF1 `location.x/y/z` is not a geographic track map. The stored track view is 
 
 ## Presentation boundary
 
-Dashboard V1 uses Streamlit with Plotly because it matches the Python and Parquet stack. It remains a small read-only consumer of curated data and artifacts: no source requests, snapshot writes, orchestration, or model fitting occur inside UI code. Data actions submit intents to the separate local job service. Calculation Snapshots and strategy outputs will be added only after their pipeline services exist.
+Dashboard V1 uses Streamlit, Plotly for overview charts, and an isolated Streamlit Components v2 renderer for synchronized Re-Live playback. It remains a small read-only consumer of curated data and artifacts: no source requests, snapshot writes, orchestration, or model fitting occur inside UI code. Data actions submit intents to the separate local job service. Calculation Snapshots and strategy outputs will be added only after their pipeline services exist.
 
-The Analysis Dashboard is the single entry point. It shows every race weekend in the selected season as a calendar card with its discovered practice, sprint, qualifying, and race sessions. Manifest-backed states distinguish locally loaded, not-yet-loaded, and not-yet-available sessions. Selecting a Grand Prix opens a local weekend overview with the data-derived season round, compact session/coordinate/weather states, a stored-track preview when present, qualifying and race result tables when available, and a complete-weekend load intent. Qualifying gaps use the last session segment reached by each driver; race gaps preserve seconds, lap deficits, DNF, DNS, and DSQ from the normalized result. Classified race positions also show the change from the qualifying result with green gain, red loss, and grey unchanged indicators; unclassified results remain `NC`. Session dialogs submit lightweight loads, confirm explicit reloads, and open Re-Live; Re-Live automatically submits its data intent when required local snapshots are missing. The project name is the persistent home control. Driver and constructor standings are displayed side by side below the calendar; the driver table includes numbers, wins, and podiums. Standings progression, teammate comparison, grid-to-finish extremes, and fastest valid stationary stops use only locally loaded facts and expose their race and row coverage. The internal replay view contains driver order and positions, the session on the stored track layout, point-in-time weather, and Race Control events. Qualifying Prediction, Race Strategy, pit windows, assumptions, and alternatives remain planned and disabled.
+The Analysis Dashboard is the single entry point. It shows every race weekend in the selected season as a calendar card with its discovered practice, sprint, qualifying, and race sessions. Manifest-backed states distinguish locally loaded, not-yet-loaded, and not-yet-available sessions. Selecting a Grand Prix opens a local weekend overview with the data-derived season round, compact session/coordinate/weather states, a stored-track preview when present, qualifying and race result tables when available, and a complete-weekend load intent. Qualifying gaps use the last session segment reached by each driver; race gaps preserve seconds, lap deficits, DNF, DNS, and DSQ from the normalized result. Classified race positions also show the change from the qualifying result with green gain, red loss, and grey unchanged indicators; unclassified results remain `NC`. Session dialogs submit lightweight loads, confirm explicit reloads, prepare missing replay data, and require a focus driver before opening Re-Live. The project name is the persistent home control. Driver and constructor standings are displayed side by side below the calendar; the driver table includes numbers, wins, and podiums. Standings progression, teammate comparison, grid-to-finish extremes, and fastest valid stationary stops use only locally loaded facts and expose their race and row coverage. Re-Live fits a 1920×1080 desktop without page scrolling and synchronizes the current order, Circle-of-Doom or stored-track cars, weather observations, session-relevant forecast slots, pit state, and Race Control with one replay clock. Significant Race Control events also appear as a temporary bottom notification. Qualifying Prediction, Race Strategy, pit windows, assumptions, and alternatives remain planned and disabled.
 
 ### Dashboard V1 and post-V1 extensions
 
@@ -424,7 +425,7 @@ The Analysis Dashboard is the single entry point. It shows every race weekend in
 | Purpose-based loading | `weekend`, `weekend_complete_v1`, `replay`, `qualifying_prediction`, and `race_strategy` session plans; session-type endpoint profiles | Feature-level endpoint plans across all sources and automatic finalization |
 | Complete-weekend state | Red weekend-card frame when all discovered sessions have local data; `weekend_complete_v1` remains available through the service and CLI | Full matching FastF1 weekend, multiple forecast vintages, and retry queue |
 | Qualifying calculation | Practice/session laps, stints, compounds and weather inputs | Leakage-free features, baseline/model, full classification, calibrated Top-15/10/3 probabilities and teammate comparison |
-| Session Re-Live | Internal view opened only from a calendar session, with Circle-of-Doom/stored centerline, reconstructed order, available gaps, point-in-time weather and Race Control | Reusable central data cut, persisted race-state service, and later calculation panels |
+| Session Re-Live | Focus-driver selection before entry; synchronized Circle-of-Doom/stored centerline, order, pit state, weather, forecast, Race Control and playback controls | Persisted race-state service and later calculation panels |
 | Strategy recommendation | Pit, stint, interval, position, weather and race-state inputs | Versioned algorithm, pit window, alternatives, uncertainty and Calculation Snapshots |
 
 The session-dialog Load Data and Re-Live controls hand deterministic job intents to a separate local HTTP service. Re-loading existing local data requires confirmation and sets `refresh=true`. The dashboard process itself remains read-only: it does not call providers, write snapshots, or execute the pipeline, and it only observes job status, curated data, manifests, and artifacts. The service persists job state but is not a delayed scheduler or distributed queue.
@@ -601,7 +602,7 @@ The CLI and local service use the same weekend orchestrator. Job status is persi
 - The Hungary reference race can be replayed from recorded snapshots with Circle and stored-track views.
 - Missing values remain missing, and source, curated, and derived data stay separated.
 - The separate job service accepts deterministic selected-session, replay, and complete-weekend intents.
-- The read-only UI displays curated results, standings, summaries, replay, Race Control, and weather without strategy or pit-projection output.
+- The read-only UI displays curated results, standings, summaries, synchronized replay, Race Control, weather, and a clearly labelled immediate-stop projection without strategy advice.
 - Unknown circuits are resolved only from uniquely validated Wikidata evidence, and replay geometry is generated from hash-verified session snapshots without blocking independent facts on failure.
 
 ## Roadmap

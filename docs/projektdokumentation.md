@@ -275,6 +275,12 @@ Der Entwurf visualisiert die ursprüngliche Produktidee. Die realisierte kleine 
 
 Die Übersichtsseite zeigt Rennkalender, Session-Auswahl, Fahrer- und Teamwertung, Siege, Podien und wenige einfache Tabellen. Die Replay-Seite zeigt die rekonstruierte Fahrerreihenfolge, das Rennen auf dem Circle of Doom oder der gespeicherten lokalen Streckenlinie, den zum Zeitpunkt verfügbaren Wetter-Forecast, Wetterbeobachtungen und Race-Control-Ereignisse. Strategie, Boxenstoppfenster, Annahmen und Alternativen sind Post-V1-Erweiterungen. Aufwendige Sondervisualisierungen gehören nicht zur ersten Dashboard-Version.
 
+Die weiterentwickelte Re-Live-Ansicht setzt diesen Entwurf als kompakte 1920×1080-Ansicht ohne Seitenscrollen um. Fahrerpositionen, Fahrzeugpunkte, Wetter, Forecast und Race Control folgen derselben Replay-Zeit. Fahrzeugdaten werden aus Vier-Sekunden-Keyframes im Browser flüssig interpoliert. Signifikante Race-Control-Ereignisse erscheinen zusätzlich als zeitlich begrenzte Meldung am unteren Rand. Der Fokusfahrer wird vor dem Öffnen festgelegt.
+
+![Pit-loss input table](assets/pitstop.png)
+
+Die Spalte `Average P/R` dieser Tabelle wurde in `config/pit_loss_seconds.json` als zentral bearbeitbare Sekundenwerte übernommen. Circle of Doom zeigt damit nur bei grüner Strecke eine hypothetische Sofort-Stopp-Position. Fehlende oder mehrdeutige Streckenwerte bleiben nicht verfügbar; der Gesamtmittelwert wird nicht als Ersatz eingesetzt. Die Anzeige ist eine transparente Annahme und keine Strategie- oder Boxenfensterempfehlung.
+
 ### Erste Geometrieversuche
 
 ![First-lap geometry](assets/track_geometry_first_laps.png)

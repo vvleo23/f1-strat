@@ -298,6 +298,23 @@ class CircleOfDoomTest(unittest.TestCase):
         )
         self.assertIsNone(final.projection)
 
+    def test_neutralized_status_suppresses_optional_pit_projection(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
+        finish = cast(pd.Timestamp, start + timedelta(seconds=120))
+        datasets = self._datasets(start, finish)
+
+        replay = build_replay(
+            datasets,
+            focus_driver=2,
+            green_pit_loss=20.0,
+            neutralized_pit_loss=None,
+            frame_seconds=10,
+            max_staleness_seconds=5,
+        )
+
+        neutralized = next(frame for frame in replay.frames if frame.status == "SC")
+        self.assertIsNone(neutralized.projection)
+
     def test_replay_cut_is_unchanged_by_future_laps_locations_and_stints(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
         finish = cast(pd.Timestamp, start + timedelta(seconds=120))

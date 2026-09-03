@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ import pandas as pd
 
 from f1_pipeline.dashboard.read_models import SessionBundle, load_session_bundle
 from f1_pipeline.geometry import (
+    TrackGeometry,
     TrackGeometryError,
     load_track_geometry,
     synthetic_track_geometry,
@@ -16,13 +18,9 @@ from f1_pipeline.replay.circle_of_doom import (
     CarState,
     DATASET_ENDPOINTS,
     DEFAULT_FRAME_SECONDS,
-    DEFAULT_GREEN_PIT_LOSS_SECONDS,
     DEFAULT_MAX_STALENESS_SECONDS,
-    DEFAULT_NEUTRALIZED_PIT_LOSS_SECONDS,
     ReplayResult,
-    build_animation_post_script,
     build_replay,
-    create_figure,
 )
 
 REPLAY_REQUIRED_ENDPOINTS = (
@@ -39,9 +37,7 @@ REPLAY_OPTIONAL_ENDPOINTS = ("intervals", "pit", "race_control")
 @dataclass(frozen=True)
 class ReplayView:
     session_key: int
-    circle_html: str
-    track_html: str | None
-    positions: pd.DataFrame
+    payload: dict[str, Any]
     frame_count: int
     used_stored_geometry: bool
     manifest_path: Path
@@ -74,7 +70,6 @@ def replay_bundle(session_key: int) -> SessionBundle:
 
 
 def final_reconstructed_positions(replay: ReplayResult) -> pd.DataFrame:
-    """Return a complete order without relying on the sparse final time frame."""
     terminal = max(
         replay.frames,
         key=lambda candidate_frame: (
@@ -87,26 +82,21 @@ def final_reconstructed_positions(replay: ReplayResult) -> pd.DataFrame:
     for frame in replay.frames:
         for car in frame.cars:
             latest_by_driver[car.driver_number] = car
-
     terminal_cars = sorted(
         terminal.cars, key=lambda candidate_car: candidate_car.position
     )
-    terminal_drivers: set[int] = {int(car.driver_number) for car in terminal_cars}
-
-    def last_seen_sort_key(candidate_car: CarState) -> tuple[int, int, int]:
-        return (
-            -candidate_car.lap_number,
-            candidate_car.position,
-            candidate_car.driver_number,
-        )
-
+    terminal_drivers = {int(car.driver_number) for car in terminal_cars}
     last_seen = sorted(
         (
             car
             for driver_number, car in latest_by_driver.items()
             if driver_number not in terminal_drivers
         ),
-        key=last_seen_sort_key,
+        key=lambda candidate_car: (
+            -candidate_car.lap_number,
+            candidate_car.position,
+            candidate_car.driver_number,
+        ),
     )
     rows: list[dict[str, Any]] = []
     for position, car in enumerate((*terminal_cars, *last_seen), start=1):
@@ -118,10 +108,100 @@ def final_reconstructed_positions(replay: ReplayResult) -> pd.DataFrame:
                 "Gap": car.displayed_gap,
                 "Compound": car.compound,
                 "Tyre age": car.tyre_age,
-                "State": "Finish frame" if car.driver_number in terminal_drivers else "Last seen",
+                "State": (
+                    "Finish frame"
+                    if car.driver_number in terminal_drivers
+                    else "Last seen"
+                ),
             }
         )
     return pd.DataFrame(rows)
+
+
+def _number(value: Any, precision: int = 4) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(number, precision) if math.isfinite(number) else None
+
+
+def _geometry_payload(geometry: TrackGeometry) -> dict[str, Any]:
+    return {
+        "label": geometry.label,
+        "quality": geometry.quality_status,
+        "points": [
+            [round(float(x), 6), round(float(y), 6)] for x, y in geometry.points
+        ],
+    }
+
+
+def replay_payload(
+    replay: ReplayResult,
+    *,
+    focus_driver: int,
+    focus_acronym: str,
+    frame_seconds: int,
+    circle: TrackGeometry,
+    stored: TrackGeometry | None,
+    pit_loss_seconds: float | None,
+) -> dict[str, Any]:
+    frames: list[dict[str, Any]] = []
+    for frame in replay.frames:
+        projection = frame.projection
+        frames.append(
+            {
+                "date": frame.date.isoformat(),
+                "lap": frame.lap_number,
+                "status": frame.status,
+                "reference_lap_time": _number(frame.reference_lap_time),
+                "cars": [
+                    [
+                        car.driver_number,
+                        car.acronym,
+                        car.team_colour,
+                        car.position,
+                        car.lap_number,
+                        round(car.lap_progress, 6),
+                        _number(car.absolute_gap),
+                        car.displayed_gap,
+                        _number(car.interval),
+                        car.compound,
+                        car.tyre_age,
+                        car.recently_pitted,
+                    ]
+                    for car in frame.cars
+                ],
+                "projection": (
+                    {
+                        "driver": projection.driver_number,
+                        "loss": _number(projection.pit_loss),
+                        "gap": _number(projection.projected_gap),
+                        "progress": round(projection.projected_progress, 6),
+                        "position": projection.projected_position,
+                        "ahead": projection.ahead,
+                        "gap_ahead": _number(projection.gap_ahead),
+                        "behind": projection.behind,
+                        "gap_behind": _number(projection.gap_behind),
+                    }
+                    if projection is not None
+                    else None
+                ),
+            }
+        )
+    return {
+        "frame_seconds": frame_seconds,
+        "race_start": replay.race_start.isoformat(),
+        "race_end": replay.race_end.isoformat(),
+        "focus_driver": focus_driver,
+        "focus_acronym": focus_acronym,
+        "pit_loss_seconds": _number(pit_loss_seconds),
+        "frames": frames,
+        "geometries": {
+            "circle": _geometry_payload(circle),
+            "track": _geometry_payload(stored) if stored is not None else None,
+        },
+    }
 
 
 def build_replay_view(
@@ -133,6 +213,7 @@ def build_replay_view(
         focus_driver: int | None = None,
         frame_seconds: int = DEFAULT_FRAME_SECONDS,
         decision_time: str | pd.Timestamp | None = None,
+        pit_loss_seconds: float | None = None,
 ) -> ReplayView:
     bundle = replay_bundle(session_key)
     datasets = bundle.frames
@@ -145,14 +226,12 @@ def build_replay_view(
     )
     if not driver_numbers:
         raise ValueError(f"Session {session_key} has no drivers.")
-    selected_driver: int
-    if focus_driver is not None and int(focus_driver) in driver_numbers:
-        selected_driver = int(focus_driver)
-    else:
-        selected_driver = driver_numbers[0]
-    driver_rows = datasets["drivers"][
-        driver_values.eq(selected_driver)
-    ]
+    selected_driver = (
+        int(focus_driver)
+        if focus_driver is not None and int(focus_driver) in driver_numbers
+        else driver_numbers[0]
+    )
+    driver_rows = datasets["drivers"][driver_values.eq(selected_driver)]
     focus_acronym = (
         str(driver_rows.iloc[0].get("name_acronym") or selected_driver)
         if not driver_rows.empty
@@ -161,8 +240,8 @@ def build_replay_view(
     replay = build_replay(
         datasets,
         focus_driver=selected_driver,
-        green_pit_loss=DEFAULT_GREEN_PIT_LOSS_SECONDS,
-        neutralized_pit_loss=DEFAULT_NEUTRALIZED_PIT_LOSS_SECONDS,
+        green_pit_loss=pit_loss_seconds,
+        neutralized_pit_loss=None,
         frame_seconds=frame_seconds,
         max_staleness_seconds=DEFAULT_MAX_STALENESS_SECONDS,
         decision_time=decision_time,
@@ -177,34 +256,20 @@ def build_replay_view(
         )
     except TrackGeometryError:
         stored = None
-
-    def render(geometry) -> str:
-        figure = create_figure(
-            replay,
-            focus_driver=selected_driver,
-            focus_acronym=focus_acronym,
-            frame_seconds=frame_seconds,
-            geometry=geometry,
-            show_pit_projection=False,
-        )
-        return figure.to_html(
-            full_html=False,
-            include_plotlyjs=True,
-            post_script=build_animation_post_script(
-                replay,
-                frame_seconds=frame_seconds,
-                geometry=geometry,
-            ),
-        )
-
-    circle_html = render(circle)
-    track_html = render(stored) if stored is not None else None
-    positions = final_reconstructed_positions(replay)
+    payload = replay_payload(
+        replay,
+        focus_driver=selected_driver,
+        focus_acronym=focus_acronym,
+        frame_seconds=frame_seconds,
+        circle=circle,
+        stored=stored,
+        pit_loss_seconds=pit_loss_seconds,
+    )
+    payload["replay_status"] = bundle.status
+    payload["missing_endpoints"] = list(bundle.missing)
     return ReplayView(
         session_key=session_key,
-        circle_html=circle_html,
-        track_html=track_html,
-        positions=positions,
+        payload=payload,
         frame_count=len(replay.frames),
         used_stored_geometry=stored is not None,
         manifest_path=bundle.manifest_path,

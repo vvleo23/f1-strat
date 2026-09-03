@@ -763,27 +763,14 @@ def _meeting_dialog(
 def _open_replay(
         season: int,
         session: pd.Series,
-        state: SessionDataState,
+        focus_driver: int,
 ) -> None:
     session_key = source_session_key(session["session_id"])
-    replay_required = set(REPLAY_REQUIRED_ENDPOINTS)
-    replay_ready = any(
-        replay_required.issubset(endpoint_set)
-        for endpoint_set in state.raw_endpoint_sets
-    )
-    if not replay_ready:
-        result = _submit(
-            _job_payload(season, session, purpose="replay", refresh=False),
-            session_key,
-        )
-        if result is None:
-            return
-        st.session_state["replay_job_id"] = result["job_id"]
-    else:
-        st.session_state.pop("replay_job_id", None)
     st.session_state["view"] = "replay"
     st.session_state["replay_season"] = season
     st.session_state["replay_session_key"] = session_key
+    st.session_state["replay_focus_driver"] = int(focus_driver)
+    st.session_state.pop("replay_job_id", None)
     st.session_state.pop("active_session_dialog", None)
     st.rerun()
 
@@ -828,25 +815,56 @@ def _session_dialog(
             feature_label = "Quali Prediction"
         elif session_name == "race":
             feature_label = "Race Strategy"
+        replay_ready = any(
+            set(REPLAY_REQUIRED_ENDPOINTS).issubset(endpoint_set)
+            for endpoint_set in state.raw_endpoint_sets
+        )
+        drivers = session_frame_for(session_key, "drivers")
+        driver_options: list[int] = []
+        driver_labels: dict[int, str] = {}
+        if not drivers.empty:
+            for row in drivers.sort_values("name_acronym").itertuples():
+                number = int(row.driver_number)
+                driver_options.append(number)
+                driver_labels[number] = f"{row.name_acronym} · #{number}"
+        focus_driver = (
+            st.selectbox(
+                "Focus driver",
+                driver_options,
+                format_func=lambda value: driver_labels[value],
+                key=f"focus_driver_{session_key}",
+            )
+            if driver_options
+            else None
+        )
+        if not driver_options:
+            st.caption("Load session data before selecting a Re-Live driver.")
         columns = st.columns(3 if feature_label else 2)
         load_clicked = columns[0].button(
             "Load data",
             disabled=not available,
-            use_container_width=True,
+            width="stretch",
             key=f"load_data_{session_key}",
         )
+        replay_label = "Re-Live" if replay_ready else "Prepare Re-Live"
         if columns[1].button(
-            "Re-Live",
-            disabled=not available,
-            use_container_width=True,
+            replay_label,
+            disabled=not available or (replay_ready and focus_driver is None),
+            width="stretch",
             key=f"re_live_{session_key}",
         ):
-            _open_replay(season, session, state)
+            if replay_ready and focus_driver is not None:
+                _open_replay(season, session, int(focus_driver))
+            else:
+                _submit(
+                    _job_payload(season, session, purpose="replay", refresh=False),
+                    session_key,
+                )
         if feature_label:
             columns[2].button(
                 feature_label,
                 disabled=True,
-                use_container_width=True,
+                width="stretch",
                 help="Planned for a later product version.",
                 key=f"future_feature_{session_key}",
             )
@@ -865,7 +883,7 @@ def _session_dialog(
             if confirm.button(
                 "Reload data",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 key=f"confirm_reload_button_{session_key}",
             ):
                 st.session_state.pop(confirmation_key, None)
@@ -875,12 +893,18 @@ def _session_dialog(
                 )
             if cancel.button(
                 "Cancel",
-                use_container_width=True,
+                width="stretch",
                 key=f"cancel_reload_button_{session_key}",
             ):
                 st.session_state.pop(confirmation_key, None)
                 st.rerun()
         _job_status(session_key)
+        if not replay_ready and st.button(
+            "Refresh Re-Live status",
+            key=f"refresh_re_live_{session_key}",
+        ):
+            st.cache_data.clear()
+            st.rerun()
         if st.button("Close", key=f"close_dialog_{session_key}"):
             st.session_state.pop("active_session_dialog", None)
             st.rerun()
@@ -1634,7 +1658,6 @@ def _dashboard(seasons: tuple[int, ...]) -> None:
 def main() -> None:
     st.set_page_config(page_title="F1-Strat", page_icon="🏁", layout="wide")
     _inject_styles()
-    _brand()
     seasons = available_seasons()
     if not seasons:
         st.error("No validated season data is available.")
@@ -1650,6 +1673,7 @@ def main() -> None:
         except DashboardDataError as exc:
             st.error(str(exc))
         return
+    _brand()
     _dashboard(seasons)
 
 

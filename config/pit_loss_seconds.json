@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "unit": "seconds",
+  "source_asset": "docs/assets/pitstop.png",
+  "overall_average": 24.1824545,
+  "circuits": [
+    {"key": "bahrain", "aliases": ["Bahrain", "Bahrain Grand Prix"], "average_pit_loss": 24.99976},
+    {"key": "saudi_arabia", "aliases": ["Saudi Arabia", "Saudi Arabian Grand Prix"], "average_pit_loss": 21.352},
+    {"key": "australia", "aliases": ["Australia", "Australian Grand Prix"], "average_pit_loss": 18.1226},
+    {"key": "emilia_romagna", "aliases": ["Emilia Romagna", "Emilia Romagna Grand Prix"], "average_pit_loss": 30.8389},
+    {"key": "miami", "aliases": ["Miami", "Miami Grand Prix"], "average_pit_loss": 19.3152},
+    {"key": "spain", "aliases": ["Spain", "Spanish Grand Prix"], "average_pit_loss": 22.555},
+    {"key": "monaco", "aliases": ["Monaco", "Monaco Grand Prix"], "average_pit_loss": 24.8387},
+    {"key": "azerbaijan", "aliases": ["Azerbaijan", "Azerbaijan Grand Prix"], "average_pit_loss": 21.9198},
+    {"key": "canada", "aliases": ["Canada", "Canadian Grand Prix"], "average_pit_loss": 24.0142},
+    {"key": "great_britain", "aliases": ["Great Britain", "British Grand Prix"], "average_pit_loss": 29.1093},
+    {"key": "austria", "aliases": ["Austria", "Austrian Grand Prix"], "average_pit_loss": 21.8988},
+    {"key": "france", "aliases": ["France", "French Grand Prix"], "average_pit_loss": 37.5676},
+    {"key": "hungary", "aliases": ["Hungary", "Hungarian Grand Prix"], "average_pit_loss": 21.6355},
+    {"key": "belgium", "aliases": ["Belgium", "Belgian Grand Prix"], "average_pit_loss": 23.0148},
+    {"key": "netherlands", "aliases": ["Netherlands", "Dutch Grand Prix"], "average_pit_loss": 19.4466},
+    {"key": "italy", "aliases": ["Italy", "Italian Grand Prix"], "average_pit_loss": 24.0484},
+    {"key": "singapore", "aliases": ["Singapore", "Singapore Grand Prix"], "average_pit_loss": 30.5657},
+    {"key": "japan", "aliases": ["Japan", "Japanese Grand Prix"], "average_pit_loss": 24.8654},
+    {"key": "united_states", "aliases": ["United States", "United States Grand Prix"], "average_pit_loss": 23.9407},
+    {"key": "mexico", "aliases": ["Mexico", "Mexico City Grand Prix", "Mexican Grand Prix"], "average_pit_loss": 22.5854},
+    {"key": "brazil", "aliases": ["Brazil", "Sao Paulo Grand Prix", "São Paulo Grand Prix", "Brazilian Grand Prix"], "average_pit_loss": 23.62054},
+    {"key": "abu_dhabi", "aliases": ["Abu Dhabi", "Abu Dhabi Grand Prix"], "average_pit_loss": 21.7591}
+  ]
+}

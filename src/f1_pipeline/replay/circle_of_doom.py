@@ -806,8 +806,8 @@ def build_replay(
         datasets: dict[str, pd.DataFrame],
         *,
         focus_driver: int,
-        green_pit_loss: float,
-        neutralized_pit_loss: float,
+        green_pit_loss: float | None,
+        neutralized_pit_loss: float | None,
         frame_seconds: int,
         max_staleness_seconds: int,
         decision_time: str | pd.Timestamp | None = None,
@@ -817,7 +817,10 @@ def build_replay(
         raise ValueError("frame_seconds must be greater than zero.")
     if max_staleness_seconds <= 0:
         raise ValueError("max_staleness_seconds must be greater than zero.")
-    if green_pit_loss < 0 or neutralized_pit_loss < 0:
+    if any(
+        value is not None and value < 0
+        for value in (green_pit_loss, neutralized_pit_loss)
+    ):
         raise ValueError("Pit-loss values must not be negative.")
 
     race_start, source_race_end = infer_race_window(
@@ -916,7 +919,8 @@ def build_replay(
         )
         projection = (
             project_pit_exit(cars, focus_driver, pit_loss, reference_lap_time)
-            if reference_lap_time is not None
+            if pit_loss is not None
+            and reference_lap_time is not None
             and all(math.isfinite(car.absolute_gap) for car in cars)
             else None
         )
