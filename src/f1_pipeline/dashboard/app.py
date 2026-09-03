@@ -509,10 +509,12 @@ def _race_results_table(
         qualifying_results = session_frame_for(
             qualifying_session_key, "session_result"
         )
-        for row in qualifying_results.dropna(
-                subset=["driver_number", "position"]
-        ).itertuples():
-            qualifying_positions[int(row.driver_number)] = int(row.position)
+        required_columns = {"driver_number", "position"}
+        if required_columns.issubset(qualifying_results.columns):
+            for row in qualifying_results.dropna(
+                    subset=["driver_number", "position"]
+            ).itertuples():
+                qualifying_positions[int(row.driver_number)] = int(row.position)
     display = display.sort_values("position", na_position="last").copy()
     display["Position"] = display.apply(
         _race_position_change,
@@ -644,9 +646,13 @@ def _meeting_dialog(
         else pd.DataFrame()
     )
 
+    def dismiss() -> None:
+        st.session_state.pop("active_meeting_dialog", None)
+
     @st.dialog(
         f"{meeting['meeting_name']} · Round {round_number}/{len(season_rounds)}",
         width="large",
+        on_dismiss=dismiss,
     )
     def dialog() -> None:
         start = pd.to_datetime(meeting["planned_start_utc"], utc=True, errors="coerce")
@@ -801,7 +807,10 @@ def _session_dialog(
         and not bool(session["is_cancelled"])
     )
 
-    @st.dialog(f"{meeting_name} · {label}")
+    def dismiss() -> None:
+        st.session_state.pop("active_session_dialog", None)
+
+    @st.dialog(f"{meeting_name} · {label}", on_dismiss=dismiss)
     def dialog() -> None:
         if isinstance(scheduled_start, pd.Timestamp) and pd.notna(scheduled_start):
             st.caption(scheduled_start.strftime("%A, %d %B %Y · %H:%M UTC"))
@@ -1360,16 +1369,17 @@ def _season_performance_highlights(season: int, catalog: SeasonCatalog) -> None:
     else:
         identities = pd.DataFrame(columns=identity_columns)
 
-    st.markdown("### Grid to finish")
+    grid_column, pit_column = st.columns(2, gap="large")
+
+    grid_column.markdown("### Grid to finish")
     grids = race_endpoint_frames_for(season, "starting_grid")
     results = season_results_for(season).copy()
-    grid_races = grids["session_id"].nunique() if not grids.empty else 0
     if grids.empty or results.empty:
-        st.caption(
-            f"0 comparable driver results · starting-grid data for "
-            f"{grid_races}/{completed_races} completed races"
+        grid_column.caption(
+            f"0 comparable driver results · based on 0/{completed_races} "
+            "completed races"
         )
-        st.info("Reload race data to add official starting-grid information.")
+        grid_column.info("Reload race data to add official starting-grid information.")
     else:
         grids = grids[["session_id", "driver_number", "grid_position"]].copy()
         grids["driver_number"] = pd.to_numeric(
@@ -1411,50 +1421,49 @@ def _season_performance_highlights(season: int, catalog: SeasonCatalog) -> None:
         comparisons["Team"] = comparisons["team_name"].fillna("Unavailable")
         comparisons["Grid"] = comparisons["Grid"].astype(int)
         comparisons["Finish"] = comparisons["Finish"].astype(int)
-        st.caption(
+        comparable_races = comparisons["session_id"].nunique()
+        grid_column.caption(
             f"{len(comparisons)} comparable classified driver results · "
-            f"starting-grid data for {grid_races}/{completed_races} completed races"
+            f"based on {comparable_races}/{completed_races} completed races"
         )
-        gained_column, lost_column = st.columns(2, gap="large")
         selections = (
-            (gained_column, "Top 3 positions gained", comparisons.nlargest(3, "Positions")),
-            (lost_column, "Flop 3 positions lost", comparisons.nsmallest(3, "Positions")),
+            ("Top 3 positions gained", comparisons.nlargest(3, "Positions")),
+            ("Flop 3 positions lost", comparisons.nsmallest(3, "Positions")),
         )
-        for column, title, selection in selections:
-            with column:
-                st.markdown(f"#### {title}")
-                display = selection.copy()
-                display["Change"] = display["Positions"].map(
-                    lambda value: f"{int(value):+d}"
-                )
-                st.dataframe(
-                    display[["Driver", "Team", "Weekend", "Grid", "Finish", "Change"]],
-                    hide_index=True,
-                    height=40 + 35 * len(display),
-                    width="stretch",
-                )
+        for title, selection in selections:
+            grid_column.markdown(f"#### {title}")
+            display = selection.copy()
+            display["Change"] = display["Positions"].map(
+                lambda value: f"{int(value):+d}"
+            )
+            grid_column.dataframe(
+                display[["Driver", "Team", "Weekend", "Grid", "Finish", "Change"]],
+                hide_index=True,
+                height=40 + 35 * len(display),
+                width="stretch",
+            )
 
-    st.markdown("### Fastest pit stops")
+    pit_column.markdown("### Fastest pit stops")
     pits = race_endpoint_frames_for(season, "pit")
-    pit_races = pits["session_id"].nunique() if not pits.empty else 0
     if pits.empty:
-        st.caption(
-            f"0 valid stop durations from 0 pit records · pit data for "
+        pit_column.caption(
+            f"0 valid stop durations from 0 pit records · based on "
             f"0/{completed_races} completed races"
         )
-        st.info("Load race pit data to rank the fastest stops.")
+        pit_column.info("Load race pit data to rank the fastest stops.")
         return
     pits = pits.copy()
     pits["Stop seconds"] = pd.to_numeric(
         pits["stop_duration_seconds"], errors="coerce"
     )
     valid_pits = pits[pits["Stop seconds"].gt(0)].copy()
-    st.caption(
+    pit_races = valid_pits["session_id"].nunique()
+    pit_column.caption(
         f"{len(valid_pits)} valid stop durations from {len(pits)} pit records · "
-        f"pit data for {pit_races}/{completed_races} completed races"
+        f"based on {pit_races}/{completed_races} completed races"
     )
     if valid_pits.empty:
-        st.info("No valid stationary stop durations are available.")
+        pit_column.info("No valid stationary stop durations are available.")
         return
     fastest = valid_pits.nsmallest(3, "Stop seconds").merge(
         identities,
@@ -1471,7 +1480,7 @@ def _season_performance_highlights(season: int, catalog: SeasonCatalog) -> None:
     fastest["Stop time"] = fastest["Stop seconds"].map(
         lambda value: f"{value:.2f}s"
     )
-    st.dataframe(
+    pit_column.dataframe(
         fastest[["Driver", "Team", "Weekend", "Lap", "Stop time"]],
         hide_index=True,
         height=40 + 35 * len(fastest),
