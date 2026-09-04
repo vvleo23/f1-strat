@@ -163,14 +163,27 @@ def _pit_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
         event_time = _timestamp(record.get("event_time"))
         if event_time is None:
             continue
+        pit_duration = _number(record.get("pit_duration_seconds"))
+        lane_duration = _number(record.get("lane_duration_seconds"))
+        interval_duration = lane_duration if lane_duration is not None else pit_duration
+        entry_time = (
+            (
+                pd.Timestamp(event_time)
+                - pd.to_timedelta(interval_duration, unit="s")
+            ).isoformat()
+            if interval_duration is not None and interval_duration >= 0
+            else None
+        )
         rows.append(
             {
                 "event_time": event_time,
                 "available_at": _timestamp(record.get("available_at")) or event_time,
+                "entry_time": entry_time,
+                "exit_time": event_time,
                 "driver_number": _number(record.get("driver_number")),
                 "lap_number": _number(record.get("lap_number")),
-                "pit_duration": _number(record.get("pit_duration_seconds")),
-                "lane_duration": _number(record.get("lane_duration_seconds")),
+                "pit_duration": pit_duration,
+                "lane_duration": lane_duration,
                 "stop_duration": _number(record.get("stop_duration_seconds")),
             }
         )

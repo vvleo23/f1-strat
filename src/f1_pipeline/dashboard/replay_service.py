@@ -136,6 +136,42 @@ def _geometry_payload(geometry: TrackGeometry) -> dict[str, Any]:
     }
 
 
+def stint_history_payload(stints: pd.DataFrame) -> list[dict[str, Any]]:
+    if stints.empty:
+        return []
+    rows: list[dict[str, Any]] = []
+    for record in stints.to_dict(orient="records"):
+        driver = _number(record.get("driver_number"), 0)
+        stint = _number(record.get("stint_number"), 0)
+        start_lap = _number(record.get("lap_start"), 0)
+        if driver is None or stint is None or start_lap is None:
+            continue
+        compound_value = record.get("compound")
+        compound = (
+            str(compound_value).strip().upper()
+            if compound_value is not None and not pd.isna(compound_value)
+            else "UNKNOWN"
+        ) or "UNKNOWN"
+        rows.append(
+            {
+                "driver": int(driver),
+                "stint": int(stint),
+                "start_lap": int(start_lap),
+                "end_lap": (
+                    int(end_lap)
+                    if (end_lap := _number(record.get("lap_end"), 0)) is not None
+                    else None
+                ),
+                "compound": compound,
+                "tyre_age_at_start": _number(record.get("tyre_age_at_start"), 0),
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda row: (row["driver"], row["start_lap"], row["stint"]),
+    )
+
+
 def replay_payload(
     replay: ReplayResult,
     *,
@@ -145,6 +181,7 @@ def replay_payload(
     circle: TrackGeometry,
     stored: TrackGeometry | None,
     pit_loss_seconds: float | None,
+    stints: pd.DataFrame,
 ) -> dict[str, Any]:
     frames: list[dict[str, Any]] = []
     for frame in replay.frames:
@@ -196,6 +233,7 @@ def replay_payload(
         "focus_driver": focus_driver,
         "focus_acronym": focus_acronym,
         "pit_loss_seconds": _number(pit_loss_seconds),
+        "tyre_stints": stint_history_payload(stints),
         "frames": frames,
         "geometries": {
             "circle": _geometry_payload(circle),
@@ -264,6 +302,7 @@ def build_replay_view(
         circle=circle,
         stored=stored,
         pit_loss_seconds=pit_loss_seconds,
+        stints=datasets["stints"],
     )
     payload["replay_status"] = bundle.status
     payload["missing_endpoints"] = list(bundle.missing)
