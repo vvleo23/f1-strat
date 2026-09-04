@@ -121,6 +121,14 @@ def plan_sessions_for_purpose(
         raise SessionPlanningError(
             f"No target session is available for purpose '{normalized_purpose}'."
         )
+    if (
+        normalized_purpose == "qualifying_prediction"
+        and target["normalized_session_type"]
+        not in {"qualifying", "sprint_qualifying"}
+    ):
+        raise SessionPlanningError(
+            "Qualifying prediction requires a Qualifying or Sprint Qualifying target."
+        )
 
     if normalized_purpose == "replay":
         if not completed_by_cut(target):
@@ -157,4 +165,3 @@ def plan_sessions_for_purpose(
         "target_session": target,
         "selection_basis": "scheduled_end_and_session_status",
     }
-

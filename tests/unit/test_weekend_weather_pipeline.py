@@ -10,7 +10,7 @@ from typing import Any
 import pandas as pd
 
 from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
-from f1_pipeline.planning import plan_sessions_for_purpose
+from f1_pipeline.planning import SessionPlanningError, plan_sessions_for_purpose
 from f1_pipeline.sources.open_meteo import (
     HOURLY_VARIABLES,
     OpenMeteoError,
@@ -290,6 +290,13 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             [row["source_session_key"] for row in practice_replay["selected_sessions"]],
             [10],
         )
+        with self.assertRaises(SessionPlanningError):
+            plan_sessions_for_purpose(
+                sessions,
+                purpose="qualifying_prediction",
+                decision_time="2026-07-26T16:00:00Z",
+                target_session_key=12,
+            )
 
     def test_qualifying_plan_includes_completed_sprint_weekend_sessions(self) -> None:
         sessions = [

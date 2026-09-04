@@ -8,14 +8,18 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from f1_pipeline.analysis.qualifying_prediction import build_qualifying_prediction
 from f1_pipeline.persistence import atomic_json
 from f1_pipeline.planning import PURPOSES
 from f1_pipeline.settings import CURATED_DATA_DIR
 from f1_pipeline.sources.weekend_weather_pipeline import run_weekend_weather_pipeline
 
 JOB_MANIFEST_DIR = CURATED_DATA_DIR / "manifests" / "jobs"
-JOB_PURPOSES = frozenset({"weekend", "weekend_complete_v1", "replay"})
+JOB_PURPOSES = frozenset(
+    {"weekend", "weekend_complete_v1", "replay", "qualifying_prediction"}
+)
 PipelineRunner = Callable[..., tuple[dict[str, Any], Path]]
+CalculationRunner = Callable[[dict[str, Any], Path], tuple[dict[str, Any], Path]]
 
 
 class JobRunnerError(RuntimeError):
@@ -46,8 +50,11 @@ class WeekendJobIntent:
             raise JobRunnerError("Season must be 1950 or later.")
         if self.meeting_key <= 0:
             raise JobRunnerError("Meeting key must be positive.")
-        if purpose == "replay" and self.target_session_key is None:
-            raise JobRunnerError("Replay jobs require a target session key.")
+        if (
+            purpose in {"replay", "qualifying_prediction"}
+            and self.target_session_key is None
+        ):
+            raise JobRunnerError(f"{purpose} jobs require a target session key.")
         return WeekendJobIntent(
             season=int(self.season),
             meeting_key=int(self.meeting_key),
@@ -90,6 +97,7 @@ def run_weekend_job(
         *,
         job_dir: Path = JOB_MANIFEST_DIR,
         pipeline_runner: PipelineRunner = run_weekend_weather_pipeline,
+        calculation_runner: CalculationRunner = build_qualifying_prediction,
 ) -> dict[str, Any]:
     normalized = intent.normalized()
     identifier = job_id(normalized)
@@ -113,6 +121,8 @@ def run_weekend_job(
         "intent": intent_payload,
     }
     atomic_json(running, status_path)
+    manifest = None
+    manifest_path = None
     try:
         manifest, manifest_path = pipeline_runner(
             season=normalized.season,
@@ -123,14 +133,39 @@ def run_weekend_job(
             refresh=normalized.refresh,
             session_keys=normalized.session_keys or None,
         )
+        calculation = None
+        calculation_path = None
+        if normalized.purpose == "qualifying_prediction":
+            calculation, calculation_path = calculation_runner(
+                manifest, manifest_path
+            )
         completed = {
             **running,
-            "status": str(manifest.get("status", "unavailable")),
+            "status": str(
+                calculation.get("status", "unavailable")
+                if calculation is not None
+                else manifest.get("status", "unavailable")
+            ),
             "pipeline_manifest_path": str(manifest_path),
             "pipeline_run_id": manifest.get("run_id"),
         }
+        if calculation is not None and calculation_path is not None:
+            completed["calculation_manifest_path"] = str(calculation_path)
+            completed["calculation_id"] = calculation.get("calculation_id")
+            if calculation.get("status") == "unavailable":
+                diagnostics = calculation.get("diagnostics", {})
+                errors = (
+                    diagnostics.get("errors", [])
+                    if isinstance(diagnostics, dict)
+                    else []
+                )
+                if errors:
+                    completed["error"] = str(errors[0])
     except Exception as exc:
         completed = {**running, "status": "unavailable", "error": str(exc)}
+        if manifest is not None and manifest_path is not None:
+            completed["pipeline_manifest_path"] = str(manifest_path)
+            completed["pipeline_run_id"] = manifest.get("run_id")
     finally:
         lock_path.unlink(missing_ok=True)
     atomic_json(completed, status_path)
@@ -168,4 +203,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

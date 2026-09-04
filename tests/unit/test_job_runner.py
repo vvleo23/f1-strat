@@ -67,7 +67,39 @@ class JobRunnerTest(unittest.TestCase):
             self.assertEqual(result["status"], "unavailable")
             self.assertEqual(result["error"], "provider failed")
 
+    def test_qualifying_job_runs_calculation_and_persists_reference(self) -> None:
+        intent = WeekendJobIntent(
+            season=2026,
+            meeting_key=1291,
+            purpose="qualifying_prediction",
+            target_session_key=11338,
+            decision_time="2026-07-25T14:00:00Z",
+        )
+        calls: list[tuple[dict[str, object], Path]] = []
+
+        def pipeline(**kwargs: object):
+            return {"status": "partial", "run_id": "run-2"}, Path("pipeline.json")
+
+        def calculation(manifest: dict[str, object], path: Path):
+            calls.append((manifest, path))
+            return (
+                {"status": "available", "calculation_id": "calculation-1"},
+                Path("calculation.json"),
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            result = run_weekend_job(
+                intent,
+                job_dir=Path(temporary),
+                pipeline_runner=pipeline,
+                calculation_runner=calculation,
+            )
+
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(result["calculation_id"], "calculation-1")
+        self.assertEqual(result["calculation_manifest_path"], "calculation.json")
+        self.assertEqual(len(calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
-

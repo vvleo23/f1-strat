@@ -130,7 +130,7 @@ Der Abgleich mit dem realisierten Stand zeigt eine bewusst ungleichmäßige Entw
 
 Bedarfsorientiertes Laden ist bisher auf Session- und Sessiontyp-Ebene umgesetzt. Der Zweck bestimmt, welche bereits abgeschlossenen Sessions grundsätzlich zulässig sind; Endpoint-Profile verhindern offensichtlich unpassende Abrufe. Eine spätere Qualifying-Berechnung darf nur vorher verfügbare Trainings-, Sprint-, Reifen- und Wetterinformationen verwenden. `weekend_complete_v1` lädt die anwendbaren OpenF1-Facts einschließlich verfügbarer Ergebnisse und Meisterschaftsstände, Sessionantworten für alle ausgewählten Sessions, Fahrzeugpositionen für Sprint und Race sowie den geprüften Circuit- und Wetterpfad. Vollständige Telemetrie, ein passendes FastF1-Wochenende und mehrere Forecast-Stände fehlen weiterhin. Die Dashboard-Buttons übergeben Aufträge an den getrennten Job-Service und zeigen dessen persistierten Status an. Die read-only Dashboard-Anwendung führt keine Providerabfragen und keine schreibende Pipeline selbst aus.
 
-Die Qualifying-Berechnung verarbeitet immer das gesamte Teilnehmerfeld. Nur so bleiben vollständige Rangfolge und Top-15-, Top-10- und Top-3-Wahrscheinlichkeiten zwischen den Fahrern konsistent. Ein Team oder Fahrer wird anschließend lediglich hervorgehoben oder mit dem Teamkollegen verglichen; ein Wechsel erfordert weder neue Quelldaten noch einen neuen feldweiten Modelllauf. Eine Strategieempfehlung ist dagegen fahrerspezifisch und benötigt einen Fokusfahrer. Ihr gemeinsamer Race State enthält trotzdem das gesamte Feld, weil Verkehr, Abstände, Boxenausfahrt sowie Under- und Overcut von den Konkurrenten abhängen. Nach Aufbau eines gecachten Race State soll ein Fahrerwechsel daher nur die kleine Strategieauswertung neu auslösen, nicht Ingestion und Replay.
+Die Qualifying-Berechnung verarbeitet immer das gesamte Teilnehmerfeld. Nur so bleiben vollständige Rangfolge und Top-15-, Top-10- und Top-5-Wahrscheinlichkeiten zwischen den Fahrern konsistent. Ein Team oder Fahrer wird anschließend lediglich hervorgehoben oder mit dem Teamkollegen verglichen; ein Wechsel erfordert weder neue Quelldaten noch einen neuen feldweiten Modelllauf. Eine Strategieempfehlung ist dagegen fahrerspezifisch und benötigt einen Fokusfahrer. Ihr gemeinsamer Race State enthält trotzdem das gesamte Feld, weil Verkehr, Abstände, Boxenausfahrt sowie Under- und Overcut von den Konkurrenten abhängen. Nach Aufbau eines gecachten Race State soll ein Fahrerwechsel daher nur die kleine Strategieauswertung neu auslösen, nicht Ingestion und Replay.
 
 ## 3. Quellen und Verifikation
 
@@ -272,10 +272,50 @@ Der OpenF1-Endpoint `intervals` antwortete für die geprüften Practice- und Qua
 | August 2026 | Location aus allgemeinen Silver-Facts ausschließen | Die hohe Datenmenge wird nur für Replay oder Geometrie geladen und nicht unnötig dupliziert |
 | August 2026 | Circuit-Identitäten als versionierte Registry laden | Neue Strecken erzeugen prüfbare Kandidaten und benötigen keinen Python-Sonderfall; unsichere oder nicht geprüfte Mappings bleiben gesperrt |
 | August 2026 | Sessionauswahl vor der Endpoint-Planung ausführen | Gesamtwochenende, einzelne Sessions und Sessiontypen verwenden dieselbe validierte Ingestion |
+| September 2026 | Qualifying Prediction als transparente statistische Baseline umsetzen | Aktuelle Trainingssessions bestimmen die Pace; lokale Historie kalibriert Korrekturen und Unsicherheit, ohne sofort ein schwer erklärbares ML-Modell einzuführen |
 
 ## 6. Forschungs- und Konkurrenzbetrachtung
 
 Untersucht wurden öffentliche Rennsimulatoren, Strategy-Repositories, Qualifying-Predictoren sowie geschlossene Produkte wie RaceWatch und F1 Insights. Öffentliche Projekte lösen Teilprobleme wie Reifenabbau, Monte-Carlo-Simulation, Replay oder Reinforcement Learning. Eine vollständig nachvollziehbare Kombination aus automatisierter öffentlicher Datenpipeline, zeitlich begrenztem Race State, Unsicherheit, Neuplanung und leakage-freiem Backtesting wurde nicht gefunden.
+
+### 6.1 Vergleichslösungen für die Qualifying Prediction
+
+Als fachliche Referenzen dienen vor allem das gemeinsame F1/AWS-Verfahren und der öffentliche F1 Picks 2025 Predictor. Beide Quellen begründen die Richtung des MVP, liefern aber keine direkt übernehmbaren Gewichte für unsere Sessions.
+
+F1/AWS sagt zunächst die Differenz `delta_t = qualifying_time - practice_time` voraus und addiert sie zur schnellsten Trainingsrunde. Verglichen wurden ein regelbasiertes Kraftstoff- und Reifengripmodell, XGBoost, AutoGluon und ein hierarchisches Bayes-Modell. Fahrer, Team und Strecke bilden die zentralen Regressionsmerkmale; das Bayes-Modell ergänzt Streckennässe und Temperaturdifferenz und liefert Unsicherheitsintervalle. Trainiert wurde mit Rennen von 2014 bis 2019, getestet mit Rennen aus 2020. Die veröffentlichten Modelle verbesserten die Zeitfehler deutlich gegenüber der unveränderten Practice-Zeit, die Rangfolge jedoch nur geringfügig. Nasse Practice- oder Qualifying-Sessions wurden wegen starker Ausreißer weitgehend aus Training und Vergleich entfernt. AWS erkennt Wetter damit als wichtigen Einfluss, weist aber keine belastbare Nass-Trocken-Übertragung nach und definiert keine Gewichte für P1, P2, P3 oder Sprint-Sessions.
+
+Der F1 Picks Predictor trainiert je Sessiontyp ein LightGBM-LambdaRank-Modell mit etwa 250 bis 330 Merkmalen aus ELO-Werten, rollierender Form, Sektoren, Reifen, Strecke und Wetter. Sein Walk-forward-Backtest trainiert für jedes Rennen nur mit zuvor verfügbaren Daten. Im Qualifying-Backtest 2025 erzielte das Modell 46 von 144 Spielpunkten, die einfache FP3-/Sprint-Qualifying-Baseline dagegen 64 von 144. Das zeigt, dass viele Merkmale und ein komplexes Rankingmodell eine aktuelle Practice-Baseline nicht automatisch schlagen. Es begründet unsere Entscheidung für eine transparente statistische Baseline vor einem ML-Modell.
+
+### 6.2 Implementierte Berechnung
+
+Die Implementierung ist als `qualifying_features_v1` und `qualifying_baseline_v1` versioniert. Sie berechnet immer das vollständige bekannte Fahrerfeld und filtert erst in der Darstellung. Mindestens eine abgeschlossene und bis `decision_time` verfügbare Trainingssession ist erforderlich. Vor der Haupt-Qualifying-Session werden alle verfügbaren Practice-Sessions sowie eine vorherige Sprint-Qualifying-Session und ein vorheriger Sprint berücksichtigt. Spätere Daten bleiben durch denselben temporalen Cut wie im Replay ausgeschlossen.
+
+Für jeden Fahrer und jede zulässige Session wird die schnellste positive Runde ohne Pit-out-Runde ausgewählt. Die Runde wird mit Reifenmischung und ungefährem Reifenalter verbunden. Statt absolute Zeiten verschiedener Sessions direkt zu mischen, wird der relative Abstand zum jeweiligen Sessionbestwert berechnet. Als Sessionwetter dienen Medianwerte der Luft- und Streckentemperatur sowie ein grobes Regime `dry` oder `wet`. Das Zielregime und die Ziellufttemperatur stammen aus dem zum `decision_time` verfügbaren, unveränderlichen Open-Meteo-Forecast.
+
+Lokale frühere Qualifyings derselben Saison kalibrieren die Differenz zwischen Sessionabstand und späterem Qualifyingabstand. Die Residuen werden zunächst nach Sessiontyp, Mischung, Reifenalterklasse, Quell- und Zielwetter sowie der auf fünf Grad gerundeten Temperaturdifferenz gesucht. Bei zu wenig Daten folgen schrittweise allgemeinere Gruppen. Der Median korrigiert den aktuellen Abstand; historische Residuen bilden die Unsicherheitsverteilung. Zusätzlich stabilisiert der Median der letzten fünf Fahrer- beziehungsweise letzten zehn Teamergebnisse Fahrer ohne vollständige aktuelle Evidenz. Ein gewichteter Median kombiniert alle verfügbaren Signale.
+
+Aus 10.000 deterministisch initialisierten Ziehungen aus der empirischen Residuenverteilung entstehen die vollständige Rangfolge, Top-15-, Top-10- und Top-5-Wahrscheinlichkeiten sowie das 10-%- bis 90-%-Positionsintervall. Der Seed wird aus der Calculation-ID abgeleitet, sodass dieselben Eingaben dasselbe Ergebnis erzeugen. Calculation Snapshot und Ergebnisartefakt speichern `decision_time`, Eingangsmanifest und Hash, Feature- und Berechnungsversion, Status, Diagnosen und Ausgabehash.
+
+### 6.3 Gewichte und Annahmen
+
+| Signal | Gewicht | Fachliche Begründung | Evidenzstatus |
+|---|---:|---|---|
+| Neueste Practice | `1,00` | Referenz und aktuellste Information über Fahrzeugzustand und Streckenentwicklung | Normalisierung, nicht geschätzt |
+| Jede ältere Practice | vorheriges Gewicht `x 0,75` | Neuere Sessions sollen stärker wirken, ohne frühere Sessions vollständig zu verwerfen | unkalibrierte MVP-Heuristik |
+| Sprint Qualifying | `1,25` | Wettbewerbsrunde mit niedrigem Kraftstoffstand und damit besonders nahe an One-Lap-Pace | unkalibrierte MVP-Heuristik |
+| Sprint | `0,35` | Kraftstoff, Verkehr, Reifenabbau und Rennsteuerung schwächen die Aussage über eine einzelne Qualifyingrunde | unkalibrierte MVP-Heuristik |
+| Abweichendes Wet-/Dry-Regime | Multiplikator `0,25` | AWS zeigt Wet-/Dry-Sessions als starke Ausreißer; wir behalten die schwache Information, statt sie vollständig zu entfernen | unkalibrierte MVP-Heuristik |
+| Fehlende Mischung oder fehlendes Reifenalter | Multiplikator `0,50` | Unvollständiger Reifenkontext soll weniger Einfluss besitzen, aber nicht als erfundener Wert ersetzt werden | unkalibrierte MVP-Heuristik; Gesamtergebnis wird `partial` |
+| Historischer Fahrer- oder Team-Prior | `0,25` | Stabilisiert dünne aktuelle Daten, ohne das aktuelle Wochenende zu dominieren | unkalibrierte MVP-Heuristik |
+| Fehlender Ziel-Forecast | Unsicherheit `x 1,50` | Fehlender Wetterkontext soll das Intervall verbreitern und keinen neutralen Wetterwert vortäuschen | unkalibrierte MVP-Heuristik; Ergebnis wird `partial` |
+
+Diese Zahlen sind deterministische Modellparameter, aber weder aus dem AWS-Verfahren übernommen noch durch unseren Backtest optimiert. Ihre Richtung ist fachlich begründet; ihre genaue Höhe ist eine explizite Startannahme. Sie dürfen daher nicht als wissenschaftlich validiert oder kalibriert bezeichnet werden. Datenbasiert sind derzeit nur die historischen Median-Korrekturen, Leader-Zeit-Verhältnisse und empirischen Residuen.
+
+### 6.4 Bewusste Abgrenzung und weitere Validierung
+
+Im Unterschied zu AWS entfernen wir ein abweichendes Wetterregime nicht vollständig, sondern werten es stark ab und kennzeichnen fehlenden Ziel-Forecast. Im Unterschied zum F1 Picks Predictor starten wir nicht mit mehreren hundert Merkmalen und LambdaRank. Kraftstoffmengen werden nicht erfunden; ihr unbekannter Einfluss verbleibt in Korrektur und Unsicherheit. Die grobe Sessionwetter-Zuordnung ersetzt keine rundenbezogene Streckenentwicklung, und die schnellste Runde kann weiterhin durch Verkehr, rote Flaggen oder unterschiedliche Run-Pläne verzerrt sein.
+
+Vor einer Erhöhung der Modellkomplexität müssen die festen Werte mit einem leakage-freien Walk-forward-Backtest abgestimmt werden. Vergleichsmaßstab ist mindestens die jeweils letzte Practice- beziehungsweise Sprint-Qualifying-Session ohne Korrektur. Zu messen sind Zeit- und Rangfehler sowie die Kalibrierung der Top-N-Wahrscheinlichkeiten. Erst ein reproduzierbarer Vorteil gegenüber dieser Baseline rechtfertigt angepasste Gewichte oder ein ML-Modell.
 
 Daraus folgt die favorisierte Forschungsfrage:
 
@@ -334,3 +374,5 @@ Neue technische Fähigkeiten werden zuerst im Status und in der Roadmap der [`RE
 - Open-Meteo Preise und freie Nutzungsgrenze: <https://open-meteo.com/en/pricing>
 - Wikidata Data Access: <https://www.wikidata.org/wiki/Wikidata:Data_access>
 - TUMFTM Race Simulation: <https://github.com/TUMFTM/race-simulation>
+- F1/AWS Qualifying Pace: <https://aws.amazon.com/blogs/machine-learning/predicting-qualification-ranking-based-on-practice-session-performance-for-formula-1-grand-prix/>
+- F1 Picks Predictor: <https://github.com/eddmann/f1-picks-2025-predictor>

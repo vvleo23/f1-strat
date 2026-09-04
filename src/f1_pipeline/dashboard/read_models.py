@@ -58,6 +58,13 @@ class SessionDataState:
         return bool(self.endpoints)
 
 
+@dataclass(frozen=True)
+class QualifyingPrediction:
+    rows: pd.DataFrame
+    snapshot: dict[str, Any]
+    manifest_path: Path
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -511,3 +518,47 @@ def load_forecast(
                 str(data_path), str(expected_hash) if expected_hash else None
             )
     return pd.DataFrame()
+
+
+def load_qualifying_prediction(
+        session_key: int,
+        *,
+        manifest_dir: Path | None = None,
+) -> QualifyingPrediction | None:
+    for directory in _manifest_dirs(manifest_dir):
+        candidates: list[tuple[pd.Timestamp, dict[str, Any], Path]] = []
+        calculation_dir = directory / "calculations"
+        for path in calculation_dir.glob(
+            f"qualifying_prediction_{session_key}_*.json"
+        ):
+            try:
+                snapshot = _load_json(path)
+            except DashboardDataError:
+                continue
+            if (
+                    snapshot.get("calculation_type") != "qualifying_prediction"
+                    or snapshot.get("status") not in READABLE_STATUSES
+                    or not snapshot.get("output_reference")
+            ):
+                continue
+            calculated_at = pd.to_datetime(
+                str(snapshot.get("calculated_at", "")), utc=True, errors="coerce"
+            )
+            if not isinstance(calculated_at, pd.Timestamp) or pd.isna(calculated_at):
+                calculated_at = pd.Timestamp(path.stat().st_mtime, unit="s", tz="UTC")
+            candidates.append((calculated_at, snapshot, path))
+        if candidates:
+            _, snapshot, path = max(
+                candidates, key=lambda item: (item[0], item[2].name)
+            )
+            rows = _read_verified_parquet(
+                str(snapshot["output_reference"]),
+                str(snapshot["output_sha256"]) if snapshot.get("output_sha256") else None,
+            )
+            expected_rows = snapshot.get("row_count")
+            if expected_rows is not None and len(rows) != int(expected_rows):
+                raise DashboardDataError(
+                    f"Qualifying prediction has {len(rows)} rows; expected {expected_rows}."
+                )
+            return QualifyingPrediction(rows, snapshot, path)
+    return None

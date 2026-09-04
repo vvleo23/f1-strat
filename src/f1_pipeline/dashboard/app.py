@@ -11,13 +11,16 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from f1_pipeline.dashboard.job_client import JobServiceError, get_job, submit_job
+from f1_pipeline.dashboard.qualifying_prediction import render_qualifying_prediction
 from f1_pipeline.dashboard.read_models import (
     DashboardDataError,
+    QualifyingPrediction,
     SeasonCatalog,
     SessionDataState,
     available_seasons,
     load_forecast,
     load_latest_standings,
+    load_qualifying_prediction,
     load_qualifying_results,
     load_season_catalog,
     load_season_results,
@@ -307,6 +310,14 @@ def _decision_time(session: pd.Series) -> str:
     return value.isoformat()
 
 
+def _prediction_decision_time(session: pd.Series) -> str:
+    start = pd.to_datetime(session["scheduled_start_utc"], utc=True, errors="coerce")
+    now = pd.Timestamp.now(tz="UTC")
+    if not isinstance(start, pd.Timestamp) or pd.isna(start):
+        return now.isoformat()
+    return min(start, now).isoformat()
+
+
 def _job_payload(
         season: int,
         session: pd.Series,
@@ -323,6 +334,18 @@ def _job_payload(
         "decision_time": _decision_time(session),
         "refresh": refresh,
         "session_keys": [session_key],
+    }
+
+
+def _prediction_job_payload(season: int, session: pd.Series) -> dict[str, Any]:
+    return {
+        "season": season,
+        "meeting_key": source_meeting_key(session["meeting_id"]),
+        "purpose": "qualifying_prediction",
+        "target_session_key": source_session_key(session["session_id"]),
+        "decision_time": _prediction_decision_time(session),
+        "refresh": False,
+        "session_keys": [],
     }
 
 
@@ -757,6 +780,14 @@ def _open_replay(
     st.rerun()
 
 
+def _open_prediction(season: int, session_key: int) -> None:
+    st.session_state["view"] = "qualifying_prediction"
+    st.session_state["prediction_season"] = season
+    st.session_state["prediction_session_key"] = session_key
+    st.session_state.pop("active_session_dialog", None)
+    st.rerun()
+
+
 def _session_dialog(
         season: int,
         meeting_name: str,
@@ -842,7 +873,25 @@ def _session_dialog(
                     _job_payload(season, session, purpose="replay", refresh=False),
                     session_key,
                 )
-        if feature_label:
+        if feature_label == "Quali Prediction":
+            prediction = load_qualifying_prediction(session_key)
+            prediction_label = (
+                "Open Quali Prediction" if prediction is not None else feature_label
+            )
+            if columns[2].button(
+                prediction_label,
+                disabled=(
+                    not isinstance(scheduled_start, pd.Timestamp)
+                    or pd.isna(scheduled_start)
+                ),
+                width="stretch",
+                key=f"qualifying_prediction_{session_key}",
+            ):
+                if prediction is not None:
+                    _open_prediction(season, session_key)
+                else:
+                    _submit(_prediction_job_payload(season, session), session_key)
+        elif feature_label:
             columns[2].button(
                 feature_label,
                 disabled=True,
@@ -1654,6 +1703,27 @@ def main() -> None:
             render_session_replay(catalog_for(season), int(session_key))
         except DashboardDataError as exc:
             st.error(str(exc))
+        return
+    if st.session_state.get("view") == "qualifying_prediction":
+        season = int(st.session_state.get("prediction_season", seasons[0]))
+        session_key = st.session_state.get("prediction_session_key")
+        if session_key is None:
+            st.session_state["view"] = "dashboard"
+            st.rerun()
+        prediction: QualifyingPrediction | None = load_qualifying_prediction(
+            int(session_key)
+        )
+        if prediction is None:
+            st.error("No readable qualifying prediction is available.")
+            return
+
+        def go_back() -> None:
+            st.session_state["view"] = "dashboard"
+            st.rerun()
+
+        render_qualifying_prediction(
+            catalog_for(season), int(session_key), prediction, go_back=go_back
+        )
         return
     _dashboard(seasons)
 
