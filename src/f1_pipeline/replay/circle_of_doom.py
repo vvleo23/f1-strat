@@ -478,10 +478,40 @@ def project_pit_exit(
     )
 
 
+def _distance_profile(
+        samples: pd.DataFrame,
+        speed_limit: float | None = None,
+) -> tuple[np.ndarray, float]:
+    coordinates = samples[["x", "y", "z"]].to_numpy(dtype=float)
+    elapsed = samples["location_at"].diff().dt.total_seconds().to_numpy()
+    segments = np.linalg.norm(np.diff(coordinates, axis=0), axis=1)
+    segment_times = elapsed[1:]
+    valid = np.isfinite(segment_times) & (segment_times > 0)
+    segments[~valid] = 0
+    speeds = np.divide(
+        segments,
+        segment_times,
+        out=np.zeros_like(segments),
+        where=valid,
+    )
+    positive = speeds[np.isfinite(speeds) & (speeds > 0)]
+    if speed_limit is None:
+        if positive.size == 0:
+            speed_limit = 0.0
+        else:
+            speed_limit = max(
+                float(np.median(positive)) * 12,
+                float(np.quantile(positive, 0.95)) * 4,
+            )
+    outliers = speeds > speed_limit
+    segments[outliers] = speed_limit * segment_times[outliers]
+    return np.concatenate(([0.0], np.cumsum(segments))), speed_limit
+
+
 def build_location_progress(location: pd.DataFrame, laps: pd.DataFrame) -> pd.DataFrame:
     """Calculate geometric lap progress for each location measurement.
 
-    The normalization uses the observed x/y/z path length of the previous completed lap.
+    The normalization uses a complete observed x/y/z reference lap per driver.
     It is only used for visualization and does not affect strategy or pit-position calculations.
     """
     locations = location.copy()
@@ -494,9 +524,11 @@ def build_location_progress(location: pd.DataFrame, laps: pd.DataFrame) -> pd.Da
     lap_starts = laps.copy()
     lap_starts["lap_started_at"] = parse_openf1_datetimes(lap_starts["date_start"])
     lap_starts["driver_number"] = lap_starts["driver_number"].astype(int)
+    lap_starts["lap_number"] = pd.to_numeric(lap_starts["lap_number"], errors="coerce")
     lap_starts = lap_starts.dropna(subset=["lap_started_at", "lap_number"])
 
-    progress_parts: list[pd.DataFrame] = []
+    driver_data: dict[int, tuple[pd.DataFrame, list[Any]]] = {}
+    distance_references: dict[int, tuple[float, float]] = {}
     for driver_number, driver_laps in lap_starts.groupby("driver_number"):
         driver_locations = locations[
             locations["driver_number"].eq(int(driver_number))
@@ -505,8 +537,122 @@ def build_location_progress(location: pd.DataFrame, laps: pd.DataFrame) -> pd.Da
             ["lap_started_at", "lap_number"]
         ].drop_duplicates("lap_started_at", keep="last")
         start_rows = list(starts.itertuples(index=False))
+        driver_data[int(driver_number)] = (driver_locations, start_rows)
 
-        previous_lap_distance: float | None = None
+        for index, current in enumerate(start_rows[:-1]):
+            following = start_rows[index + 1]
+            if int(following.lap_number) != int(current.lap_number) + 1:
+                continue
+            start_at = cast(pd.Timestamp, cast(Any, current.lap_started_at))
+            end_at = cast(pd.Timestamp, cast(Any, following.lap_started_at))
+            samples = driver_locations[
+                driver_locations["location_at"].between(
+                    start_at, end_at, inclusive="both"
+                )
+            ].copy()
+            if len(samples) < 3:
+                continue
+            duration = (end_at - start_at).total_seconds()
+            tolerance = max(2.0, min(5.0, duration * 0.05))
+            if (
+                (samples["location_at"].iloc[0] - start_at).total_seconds() > tolerance
+                or (end_at - samples["location_at"].iloc[-1]).total_seconds()
+                > tolerance
+            ):
+                continue
+            cumulative, speed_limit = _distance_profile(samples)
+            distance = float(cumulative[-1])
+            if math.isfinite(distance) and distance > 0:
+                distance_references[int(driver_number)] = (distance, speed_limit)
+                break
+
+    if not distance_references:
+        raise CircleOfDoomError(
+            "Could not establish a complete reference lap from OpenF1 location data."
+        )
+
+    global_distance = float(
+        np.median([reference[0] for reference in distance_references.values()])
+    )
+    global_speed_limit = float(
+        np.median([reference[1] for reference in distance_references.values()])
+    )
+    progress_parts: list[pd.DataFrame] = []
+
+    for driver_number, (driver_locations, start_rows) in driver_data.items():
+        reference_distance, speed_limit = distance_references.get(
+            driver_number, (global_distance, global_speed_limit)
+        )
+        if not 0.75 * global_distance <= reference_distance <= 1.25 * global_distance:
+            reference_distance = global_distance
+
+        cleaned_rows = list(start_rows)
+        index = 0
+        while index + 2 < len(cleaned_rows):
+            current, middle, following = cleaned_rows[index : index + 3]
+            current_at = cast(pd.Timestamp, cast(Any, current.lap_started_at))
+            middle_at = cast(pd.Timestamp, cast(Any, middle.lap_started_at))
+            following_at = cast(pd.Timestamp, cast(Any, following.lap_started_at))
+            first_samples = driver_locations[
+                driver_locations["location_at"].between(
+                    current_at, middle_at, inclusive="both"
+                )
+            ]
+            second_samples = driver_locations[
+                driver_locations["location_at"].between(
+                    middle_at, following_at, inclusive="both"
+                )
+            ]
+            first_distance = (
+                float(_distance_profile(first_samples)[0][-1])
+                if len(first_samples) >= 2
+                else 0.0
+            )
+            second_distance = (
+                float(_distance_profile(second_samples)[0][-1])
+                if len(second_samples) >= 2
+                else 0.0
+            )
+            first_ratio = first_distance / reference_distance
+            second_ratio = second_distance / reference_distance
+            if (
+                0.2 < first_ratio < 0.78
+                and 0.2 < second_ratio < 0.78
+                and 0.82 <= first_ratio + second_ratio <= 1.18
+            ):
+                del cleaned_rows[index + 1]
+                continue
+            index += 1
+        start_rows = cleaned_rows
+
+        first_start = cast(pd.Timestamp, cast(Any, start_rows[0].lap_started_at))
+        race_start = cast(
+            pd.Timestamp,
+            lap_starts.loc[lap_starts["lap_number"].eq(1), "lap_started_at"].min(),
+        )
+        if first_start > race_start and (first_start - race_start).total_seconds() <= 30:
+            samples = driver_locations[
+                driver_locations["location_at"].between(
+                    race_start, first_start, inclusive="both"
+                )
+            ].copy()
+            if len(samples) >= 2:
+                cumulative, _ = _distance_profile(samples)
+                samples["track_progress"] = np.mod(
+                    (cumulative - cumulative[-1]) / reference_distance, 1.0
+                )
+                samples["lap_number_from_location"] = 1
+                progress_parts.append(
+                    samples[
+                        [
+                            "location_at",
+                            "driver_number",
+                            "track_progress",
+                            "lap_number_from_location",
+                        ]
+                    ]
+                )
+
         for index, current in enumerate(start_rows):
             start_at = cast(pd.Timestamp, cast(Any, current.lap_started_at))
             following = start_rows[index + 1] if index + 1 < len(start_rows) else None
@@ -521,52 +667,32 @@ def build_location_progress(location: pd.DataFrame, laps: pd.DataFrame) -> pd.Da
                         start_at, end_at, inclusive="both"
                     )
                 ].copy()
-            if samples.empty:
+            if len(samples) < 2:
                 continue
 
-            coordinates = samples[["x", "y", "z"]].to_numpy(dtype=float)
-            elapsed = samples["location_at"].diff().dt.total_seconds().to_numpy()
-            segments = np.linalg.norm(np.diff(coordinates, axis=0), axis=1)
-            segment_times = elapsed[1:]
-            valid_speed = segment_times > 0
-            segments[~valid_speed] = 0
-            speeds = np.divide(
-                segments,
-                segment_times,
-                out=np.zeros_like(segments),
-                where=valid_speed,
-            )
-            accepted_speeds: list[float] = []
-            for segment_index, speed in enumerate(speeds):
-                if not math.isfinite(speed) or speed <= 0:
-                    continue
-                if accepted_speeds:
-                    median_speed = float(np.median(accepted_speeds))
-                    if speed > median_speed * 6:
-                        speed = median_speed
-                        segments[segment_index] = speed * segment_times[segment_index]
-                accepted_speeds.append(float(speed))
-
-            cumulative = np.concatenate(([0.0], np.cumsum(segments)))
-            if previous_lap_distance is not None:
-                samples["track_progress"] = np.clip(
-                    cumulative / previous_lap_distance, 0, 1
-                )
-                samples["lap_number_from_location"] = int(current.lap_number)
-                progress_parts.append(
-                    samples[
-                        [
-                            "location_at",
-                            "driver_number",
-                            "track_progress",
-                            "lap_number_from_location",
-                        ]
+            if following is not None:
+                cumulative, _ = _distance_profile(samples)
+                distance = float(cumulative[-1])
+                if distance > 0:
+                    lap_span = max(1, int(round(distance / reference_distance)))
+                    normalized = cumulative * lap_span / distance
+                else:
+                    normalized = cumulative
+            else:
+                cumulative, _ = _distance_profile(samples, speed_limit)
+                normalized = cumulative / reference_distance
+            samples["track_progress"] = np.mod(normalized, 1.0)
+            samples["lap_number_from_location"] = int(current.lap_number)
+            progress_parts.append(
+                samples[
+                    [
+                        "location_at",
+                        "driver_number",
+                        "track_progress",
+                        "lap_number_from_location",
                     ]
-                )
-            if following is not None and len(samples) >= 3:
-                total_distance = float(cumulative[-1])
-                if math.isfinite(total_distance) and total_distance > 0:
-                    previous_lap_distance = total_distance
+                ]
+            )
 
     if not progress_parts:
         raise CircleOfDoomError(

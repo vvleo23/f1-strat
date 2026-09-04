@@ -130,7 +130,140 @@ class CircleOfDoomTest(unittest.TestCase):
 
         progress = build_location_progress(location, laps)
 
-        self.assertEqual(progress["track_progress"].tolist(), [0.0, 0.5, 0.0])
+        self.assertEqual(
+            progress["track_progress"].tolist(), [0.0, 0.5, 0.0, 0.5, 0.0]
+        )
+
+    def test_location_progress_keeps_moving_across_missing_lap_number(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-08-23T13:00:00Z"))
+        laps = pd.DataFrame(
+            [
+                {"date_start": start, "driver_number": 1, "lap_number": 1},
+                {
+                    "date_start": start + timedelta(seconds=4),
+                    "driver_number": 1,
+                    "lap_number": 2,
+                },
+                {
+                    "date_start": start + timedelta(seconds=12),
+                    "driver_number": 1,
+                    "lap_number": 4,
+                },
+                {
+                    "date_start": start + timedelta(seconds=16),
+                    "driver_number": 1,
+                    "lap_number": 5,
+                },
+            ]
+        )
+        coordinates = [0, 1, 2, 1, 0, 1, 2, 1, 0, 1, 2, 1, 0, 1, 2, 1, 0]
+        location = pd.DataFrame(
+            [
+                {
+                    "date": start + timedelta(seconds=seconds),
+                    "driver_number": 1,
+                    "x": coordinate,
+                    "y": 0,
+                    "z": 0,
+                }
+                for seconds, coordinate in enumerate(coordinates)
+            ]
+        )
+
+        progress = build_location_progress(location, laps)
+
+        self.assertEqual(
+            progress["track_progress"].round(2).tolist(),
+            [0.0, 0.25, 0.5, 0.75] * 4 + [0.0],
+        )
+
+    def test_location_progress_does_not_treat_start_acceleration_as_outlier(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
+        laps = pd.DataFrame(
+            [
+                {"date_start": start, "driver_number": 1, "lap_number": 1},
+                {
+                    "date_start": start + timedelta(seconds=4),
+                    "driver_number": 1,
+                    "lap_number": 2,
+                },
+                {
+                    "date_start": start + timedelta(seconds=8),
+                    "driver_number": 1,
+                    "lap_number": 3,
+                },
+            ]
+        )
+        coordinates = [0, 0.01, 1.01, 2.01, 3.01, 4.01, 5.01, 6.01, 7.01]
+        location = pd.DataFrame(
+            [
+                {
+                    "date": start + timedelta(seconds=seconds),
+                    "driver_number": 1,
+                    "x": coordinate,
+                    "y": 0,
+                    "z": 0,
+                }
+                for seconds, coordinate in enumerate(coordinates)
+            ]
+        )
+
+        progress = build_location_progress(location, laps)
+        second_lap = progress[
+            progress["location_at"].between(
+                start + timedelta(seconds=4),
+                start + timedelta(seconds=8),
+                inclusive="left",
+            )
+        ]
+
+        self.assertAlmostEqual(second_lap.iloc[1]["track_progress"], 0.25)
+        self.assertTrue(second_lap["track_progress"].lt(1).all())
+
+    def test_location_progress_merges_spurious_intermediate_lap_start(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-08-23T13:00:00Z"))
+        laps = pd.DataFrame(
+            [
+                {"date_start": start, "driver_number": 1, "lap_number": 1},
+                {
+                    "date_start": start + timedelta(seconds=6),
+                    "driver_number": 1,
+                    "lap_number": 2,
+                },
+                {
+                    "date_start": start + timedelta(seconds=9),
+                    "driver_number": 1,
+                    "lap_number": 3,
+                },
+                {
+                    "date_start": start + timedelta(seconds=12),
+                    "driver_number": 1,
+                    "lap_number": 4,
+                },
+            ]
+        )
+        location = pd.DataFrame(
+            [
+                {
+                    "date": start + timedelta(seconds=seconds),
+                    "driver_number": 1,
+                    "x": seconds,
+                    "y": 0,
+                    "z": 0,
+                }
+                for seconds in range(13)
+            ]
+        )
+
+        progress = build_location_progress(location, laps)
+
+        self.assertAlmostEqual(
+            progress.loc[
+                progress["location_at"].eq(start + timedelta(seconds=9)),
+                "track_progress",
+            ].iloc[0],
+            0.5,
+        )
 
     def test_location_progress_is_stable_when_future_samples_are_appended(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
@@ -262,7 +395,7 @@ class CircleOfDoomTest(unittest.TestCase):
             max_staleness_seconds=5,
         )
 
-        self.assertEqual(len(replay.frames), 7)
+        self.assertEqual(len(replay.frames), 13)
         middle = replay.frames[1]
         focus = next(car for car in middle.cars if car.driver_number == 2)
         # Der letzte Abstand ist 10 s alt, die Location-Messung jedoch aktuell.
