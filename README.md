@@ -75,7 +75,7 @@ The repository includes a 3.6 MiB Hungaroring demo dataset with one race, weathe
 
 ## Current status
 
-Last updated: **30 August 2026**
+Last updated: **4 September 2026**
 
 ### Implemented
 
@@ -106,6 +106,9 @@ Last updated: **30 August 2026**
 - focused unit tests for validation, master data, geometry, pace, replay, session selection, result/standing ingestion, and job execution
 - bundled hash-verified Hungaroring demo data with automatic dashboard fallback
 - per-driver OpenF1 location ingestion for bounded high-volume requests
+- unified m/s wind-speed display and hourly-to-target linear interpolation (circular for wind direction) between the current track observation and the Open-Meteo forecast tiles in Re-Live
+- weekend-level forecast summary, interpolated per session start, in the season-overview meeting dialog
+- locking around the shared season-wide master dimensions and the shared circuit dimension so concurrent weekend jobs for different meetings can no longer silently discard each other's writes; the `starting_grid` OpenF1 endpoint's permanent HTTP 404 is now treated as a legitimate empty response instead of an ingestion failure
 
 ### Partly implemented
 
@@ -114,12 +117,16 @@ Last updated: **30 August 2026**
 - The orchestrator and local job runner are restartable and idempotent; delayed retry scheduling and automatic finalization are not implemented.
 - Sprint session planning is implemented and unit-tested, but the current Hungary acceptance weekend has no Sprint.
 - Track centerlines are local OpenF1 display geometry, not geographic map geometry.
+- The new cross-meeting lock covers jobs started through the weekend-weather pipeline (dashboard and CLI weekend runs); a concurrent direct `python -m f1_pipeline.master_data` CLI call is not covered. A waiting job also redoes the full season master-data rebuild after acquiring the lock rather than reusing the winner's result; accepted for a single-user tool rather than optimized away.
+- `OpenF1Client` rate-limits requests per instance, not per season or globally, so several concurrent jobs can still add up to a higher combined request rate than intended; not fixed for now (see decision log — deprioritized as a scaling concern for a private, single-user tool).
+- A single historical HTTP 401 from the OpenF1 `meetings` endpoint was observed with no retry budget (401 is not in the retry status list); not reproduced since and not fixed for now.
 
 ### Not implemented
 
 - delayed retry scheduler and automatic session finalization
 - qualifying calculations, race calculations, and strategy recommendations
 - paid live ingestion
+- a shared rate limit across concurrent OpenF1 jobs and a retry budget for transient HTTP 401 responses (see "Partly implemented"; deprioritized for a private, single-user tool)
 
 ## Repository structure
 
