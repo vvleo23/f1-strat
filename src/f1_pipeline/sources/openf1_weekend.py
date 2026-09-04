@@ -75,7 +75,13 @@ OPTIONAL_BY_SESSION_TYPE = {
         }
     ),
 }
-ALLOW_EMPTY = frozenset({"intervals", "pit", "race_control"})
+ALLOW_EMPTY = frozenset({"intervals", "pit", "race_control", "starting_grid"})
+# OpenF1 returns HTTP 404 (not an empty JSON array) for these endpoints when
+# there is nothing to report, mirroring the already-documented `intervals`
+# 404 for non-applicable session types. `starting_grid` was observed to 404
+# for every checked race session (2025 and 2026); treat that the same as a
+# legitimate empty response instead of an ingestion failure.
+EMPTY_ON_404 = frozenset({"starting_grid"})
 REQUIRED_COLUMNS = {
     "sessions": {"session_key", "meeting_key", "session_name", "date_start"},
     "drivers": {"session_key", "driver_number", "name_acronym"},
@@ -408,7 +414,11 @@ def _load_endpoint(
             location_frames.append(driver_frame)
         frame = pd.concat(location_frames, ignore_index=True)
     else:
-        payload = client.get_json(endpoint, {"session_key": session_key})
+        payload = client.get_json(
+            endpoint,
+            {"session_key": session_key},
+            treat_404_as_empty=endpoint in EMPTY_ON_404,
+        )
         frame = make_parquet_safe(
             endpoint,
             pd.DataFrame(payload, columns=sorted(REQUIRED_COLUMNS[endpoint]))
@@ -443,7 +453,8 @@ def _session_status(
     if required_failed:
         return "unavailable"
     optional_failed = any(
-        endpoints[name]["status"] == "unavailable" or endpoints[name].get("empty")
+        endpoints[name]["status"] == "unavailable"
+        or (endpoints[name].get("empty") and name not in ALLOW_EMPTY)
         for name in optional
     )
     if optional_failed:

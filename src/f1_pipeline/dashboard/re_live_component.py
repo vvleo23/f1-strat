@@ -167,7 +167,7 @@ export default function(component) {
   const events = Array.isArray(data.race_control) ? data.race_control.map(event => ({...event, time: Date.parse(event.event_time), visibleTime: Math.max(Date.parse(event.event_time), Number(event.available_at_ms))})).filter(event => Number.isFinite(event.time) && Number.isFinite(event.visibleTime)).sort((a, b) => a.visibleTime - b.visibleTime) : []
   const pits = Array.isArray(data.pits) ? data.pits.map(pit => ({...pit, entry: Date.parse(pit.entry_time), exit: Date.parse(pit.exit_time || pit.event_time)})).filter(pit => Number.isFinite(pit.entry) && Number.isFinite(pit.exit) && pit.entry <= pit.exit).sort((a, b) => a.entry - b.entry) : []
   const observations = Array.isArray(data.weather_observations) ? data.weather_observations.map(row => ({...row, time: Date.parse(row.event_time), available: Date.parse(row.available_at || row.event_time)})).filter(row => Number.isFinite(row.time) && Number.isFinite(row.available)).sort((a, b) => a.time - b.time) : []
-  const forecasts = Array.isArray(data.forecasts) ? data.forecasts.map(row => ({...row, valid: Date.parse(row.valid_time), available: Date.parse(row.available_at), initialized: Date.parse(row.run_initialized_at)})).filter(row => Number.isFinite(row.valid) && Number.isFinite(row.available)).sort((a, b) => a.valid - b.valid) : []
+  const forecasts = Array.isArray(data.forecasts) ? data.forecasts.map(row => ({...row, valid: Date.parse(row.valid_time), available: Date.parse(row.available_at), initialized: Date.parse(row.run_initialized_at), windSpeedMs: finite(row.wind_speed) ? Number(row.wind_speed) / 3.6 : null, rainValue: finite(row.rain) ? Number(row.rain) : finite(row.precipitation) ? Number(row.precipitation) : null})).filter(row => Number.isFinite(row.valid) && Number.isFinite(row.available)).sort((a, b) => a.valid - b.valid) : []
   const tyreStints = new Map()
   for (const stint of Array.isArray(data.tyre_stints) ? data.tyre_stints : []) {
     const driver = Number(stint.driver)
@@ -419,6 +419,42 @@ export default function(component) {
     return finite(value) ? `${Number(value).toFixed(digits)}${suffix}` : 'Unavailable'
   }
 
+  // Open-Meteo only publishes hourly points. A forecast tile for a target
+  // between two hourly points is linearly interpolated from its two
+  // neighbours instead of snapping forward to the next full hour — wind
+  // direction is a circular quantity, so it is blended over the shorter arc
+  // rather than interpolated as a plain number.
+  function circularMeanDegrees(from, to, fraction) {
+    const radiansFrom = Number(from) * Math.PI / 180
+    const radiansTo = Number(to) * Math.PI / 180
+    const x = Math.cos(radiansFrom) * (1 - fraction) + Math.cos(radiansTo) * fraction
+    const y = Math.sin(radiansFrom) * (1 - fraction) + Math.sin(radiansTo) * fraction
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360
+  }
+
+  function interpolateForecast(snapshot, target) {
+    let before = null
+    let after = null
+    for (const row of snapshot) {
+      if (row.valid <= target) before = row
+      else if (!after) after = row
+    }
+    if (!before || !after) return null
+    if (after.valid === before.valid) {
+      return { valid: before.valid, temperature: before.temperature, rain: before.rainValue, wind_speed: before.windSpeedMs, wind_direction: before.wind_direction, interpolated: false }
+    }
+    const fraction = Math.max(0, Math.min(1, (target - before.valid) / (after.valid - before.valid)))
+    const lerp = (a, b) => finite(a) && finite(b) ? Number(a) + (Number(b) - Number(a)) * fraction : null
+    return {
+      valid: target,
+      temperature: lerp(before.temperature, after.temperature),
+      rain: lerp(before.rainValue, after.rainValue),
+      wind_speed: lerp(before.windSpeedMs, after.windSpeedMs),
+      wind_direction: finite(before.wind_direction) && finite(after.wind_direction) ? circularMeanDegrees(before.wind_direction, after.wind_direction, fraction) : null,
+      interpolated: fraction > 0.0001 && fraction < 0.9999,
+    }
+  }
+
   function renderWeather(time) {
     const current = latestObservation(time)
     const rainfall = current && finite(current.rainfall) ? Number(current.rainfall) ? 'yes' : 'no' : 'Unavailable'
@@ -427,10 +463,10 @@ export default function(component) {
     const offsets = [[0, 'Now'], [10, '+10 min'], [30, '+30 min'], [60, '+60 min']]
     query('.forecast-grid').innerHTML = offsets.map(([minutes, label]) => {
       const target = time + Number(minutes) * 60000
-      const row = snapshot.find(candidate => candidate.valid >= target && candidate.valid <= sessionEnd)
+      const row = target <= sessionEnd ? interpolateForecast(snapshot, target) : null
       if (!row) return `<div class="forecast-tile"><div class="tile-title">${label}</div><div class="tile-primary">Unavailable</div><div class="tile-secondary">No session-relevant forecast</div></div>`
-      const rain = finite(row.rain) ? Number(row.rain) : finite(row.precipitation) ? Number(row.precipitation) : null
-      return `<div class="forecast-tile"><div class="tile-title">${label} · ${escapeHtml(formatTime(row.valid, false))}</div><div class="tile-primary">${escapeHtml(weatherValue(row.temperature, 1, ' °C'))}</div><div class="tile-secondary">Rain ${escapeHtml(weatherValue(rain, 1, ' mm'))}<br>Wind ${escapeHtml(weatherValue(row.wind_speed, 1, ' km/h'))} · ${escapeHtml(weatherValue(row.wind_direction, 0, '°'))}</div></div>`
+      const note = row.interpolated ? ' · interpolated' : ''
+      return `<div class="forecast-tile"><div class="tile-title">${label} · ${escapeHtml(formatTime(row.valid, false))}${note}</div><div class="tile-primary">${escapeHtml(weatherValue(row.temperature, 1, ' °C'))}</div><div class="tile-secondary">Rain ${escapeHtml(weatherValue(row.rain, 1, ' mm'))}<br>Wind ${escapeHtml(weatherValue(row.wind_speed, 1, ' m/s'))} · ${escapeHtml(weatherValue(row.wind_direction, 0, '°'))}</div></div>`
     }).join('')
   }
 
