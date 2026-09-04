@@ -503,7 +503,10 @@ def project_pit_exit(
         reference_lap_time: float,
 ) -> PitProjection | None:
     """Projiziert Position und direkte Nachbarn nach einem sofortigen Stopp."""
-    car_list = sorted(cars, key=lambda car: car.absolute_gap)
+    car_list = sorted(
+        (car for car in cars if not car.inactive),
+        key=lambda car: car.absolute_gap,
+    )
     focus = next((car for car in car_list if car.driver_number == focus_driver), None)
     if focus is None:
         return None

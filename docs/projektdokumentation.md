@@ -299,7 +299,7 @@ Bleibt ein Fahrzeug unter grünen Bedingungen 90 Sekunden ohne relevanten Streck
 
 ![Pit-loss input table](assets/pitstop.png)
 
-Die Spalte `Average P/R` dieser Tabelle wurde in `config/pit_loss_seconds.json` als zentral bearbeitbare Sekundenwerte übernommen. Circle of Doom zeigt damit nur bei grüner Strecke eine hypothetische Sofort-Stopp-Position. Fehlende oder mehrdeutige Streckenwerte bleiben nicht verfügbar; der Gesamtmittelwert wird nicht als Ersatz eingesetzt. Die Anzeige ist eine transparente Annahme und keine Strategie- oder Boxenfensterempfehlung.
+Die Spalte `Average P/R` dieser Tabelle wurde in `config/pit_loss_seconds.json` als zentral bearbeitbare Sekundenwerte übernommen. Circle of Doom zeigt damit nur bei grüner Strecke eine hypothetische Sofort-Stopp-Position. Bereits als `OUT` erkannte Fahrer werden nicht mehr als vorausliegende Fahrzeuge mitgezählt. Fehlende oder mehrdeutige Streckenwerte bleiben nicht verfügbar; der Gesamtmittelwert wird nicht als Ersatz eingesetzt. Die Anzeige ist eine transparente Annahme und keine Strategie- oder Boxenfensterempfehlung.
 
 ### Erste Geometrieversuche
 

@@ -102,7 +102,7 @@ Last updated: **4 September 2026**
 - Re-Live inactivity handling that removes cars after 90 stationary green-flag seconds while retaining a dimmed `OUT` driver row and allowing later movement to reactivate the car
 - separate local HTTP job service with deterministic intents and persisted status for selected-session and Weekend Complete V1 actions
 - automatic manifest-bound local centerlines in season-partitioned geometry dimensions
-- leakage-free Circle-of-Doom replay with point-in-time reference pace, causal lap progress, released stint visibility, synthetic-circle default, and optional stored geometry
+- leakage-free Circle-of-Doom replay with point-in-time reference pace, causal lap progress, released stint visibility, inactive-driver-safe pit-exit positions, synthetic-circle default, and optional stored geometry
 - OpenF1 pace-by-stint analysis with a separate FastF1 driver-level comparison
 - focused unit tests for validation, master data, geometry, pace, replay, session selection, result/standing ingestion, and job execution
 - bundled hash-verified Hungaroring demo data with automatic dashboard fallback

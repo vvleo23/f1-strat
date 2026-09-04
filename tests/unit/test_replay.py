@@ -9,6 +9,7 @@ from typing import cast
 import pandas as pd
 
 from f1_pipeline.replay.circle_of_doom import (
+    CarState,
     build_location_progress,
     build_replay,
     driver_is_inactive,
@@ -16,12 +17,57 @@ from f1_pipeline.replay.circle_of_doom import (
     field_is_moving,
     infer_race_window,
     make_parquet_safe,
+    project_pit_exit,
     reconstruct_absolute_gaps,
     status_events,
 )
 
 
 class CircleOfDoomTest(unittest.TestCase):
+    def test_pit_projection_excludes_inactive_drivers(self) -> None:
+        def car(
+                driver: int,
+                acronym: str,
+                position: int,
+                gap: float,
+                inactive: bool = False,
+        ) -> CarState:
+            return CarState(
+                driver_number=driver,
+                acronym=acronym,
+                team_colour="#808080",
+                position=position,
+                lap_number=10,
+                lap_progress=0.5,
+                absolute_gap=gap,
+                displayed_gap=f"+{gap:.1f}s",
+                interval=None,
+                compound=None,
+                tyre_age=None,
+                recently_pitted=False,
+                inactive=inactive,
+            )
+
+        projection = project_pit_exit(
+            (
+                car(1, "LEA", 1, 0.0),
+                car(3, "OUT", 6, 5.0, inactive=True),
+                car(87, "DNF", 5, 15.0, inactive=True),
+                car(23, "ALB", 2, 20.0),
+                car(43, "COL", 3, 25.0),
+                car(11, "PER", 4, 40.0),
+            ),
+            focus_driver=23,
+            pit_loss=10.0,
+            reference_lap_time=80.0,
+        )
+
+        self.assertIsNotNone(projection)
+        assert projection is not None
+        self.assertEqual(projection.projected_position, 3)
+        self.assertEqual(projection.ahead, "COL")
+        self.assertEqual(projection.behind, "PER")
+
     def test_field_must_resume_before_inactivity_timer_runs(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-08-23T13:00:00Z"))
         activity = {driver: (2.5, start, False) for driver in range(1, 11)}
