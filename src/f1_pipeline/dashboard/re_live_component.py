@@ -91,10 +91,13 @@ button { font: inherit; }
 .status.neutralized { background: #a27100; }
 .status.stopped { background: #a92323; }
 .focus-copy { margin-top: 7px; color: #8fd8ff; font-size: 12px; }
-.list-title { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 5px; padding: 5px 10px; color: #7f8a99; font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.list-title { display: grid; grid-template-columns: 93px minmax(0, 1fr) auto; align-items: center; gap: 5px; padding: 5px 10px; color: #7f8a99; font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .positions { overflow-y: auto; scrollbar-width: thin; scrollbar-color: #46505e transparent; }
-.position-row { min-height: 25px; display: grid; grid-template-columns: 24px 5px 38px minmax(70px, 1fr) auto; align-items: center; gap: 5px; padding: 3px 9px; border-top: 1px solid #1e242d; font-size: 11px; }
+.position-row { min-height: 25px; display: grid; grid-template-columns: 12px 24px 5px 38px minmax(70px, 1fr) auto; align-items: center; gap: 5px; padding: 3px 9px; border-top: 1px solid #1e242d; font-size: 11px; will-change: transform; }
 .position-row.focus { background: rgba(78, 184, 235, .14); }
+.position-change { width: 12px; color: transparent; font-size: 11px; font-weight: 900; line-height: 1; text-align: center; }
+.position-change.gained { color: #21a366; animation: position-signal .7s ease both; }
+.position-change.lost { color: #e10600; animation: position-signal .7s ease both; }
 .position-number { color: #8c96a5; text-align: right; }
 .team-mark { width: 5px; height: 17px; border-radius: 4px; }
 .driver-code { font-weight: 850; }
@@ -135,6 +138,8 @@ button { font: inherit; }
 .clock { font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
 .notification { position: absolute; left: 50%; bottom: 88px; max-width: 650px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid #e2b53d; border-radius: 8px; background: rgba(24, 20, 8, .96); color: #ffe38a; padding: 10px 18px; font-size: 12px; font-weight: 800; text-align: center; transition: opacity .18s ease, transform .18s ease; }
 .notification.visible { transform: translateX(-50%) translateY(0); opacity: 1; }
+@keyframes position-signal { 0% { opacity: 0; transform: scale(.65); } 18%, 72% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.15); } }
+@media (prefers-reduced-motion: reduce) { .position-change.gained, .position-change.lost { animation: none; opacity: 1; } }
 @media (max-width: 1450px) { .dashboard-grid { grid-template-columns: 250px minmax(520px, 1fr) 285px; } .topbar { grid-template-columns: 105px 230px minmax(0, 1fr); } }
 """
 
@@ -179,6 +184,11 @@ export default function(component) {
   let lastPanelSecond = -1
   let notificationTimer = null
   let priorRaceTime = startTime
+  let previousPositions = new Map()
+  let lastPositionRenderTime = null
+  const positionAnimations = new Map()
+  const positionSignals = new Map()
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const timeline = query('.timeline')
   const playButton = query('.play')
   const trackButton = query('[data-view="track"]')
@@ -317,12 +327,66 @@ export default function(component) {
   function renderPositions(frame, time) {
     const pitDrivers = activePitDrivers(time)
     const rows = [...frame.cars].sort((left, right) => Number(left[3]) - Number(right[3]))
-    query('.positions').innerHTML = rows.map(car => {
+    const container = query('.positions')
+    const existingRows = new Map(Array.from(container.querySelectorAll('.position-row')).map(row => [Number(row.dataset.driver), row]))
+    const oldTops = new Map(Array.from(existingRows, ([driver, row]) => [driver, row.getBoundingClientRect().top]))
+    const trackChanges = lastPositionRenderTime != null && time > lastPositionRenderTime && time - lastPositionRenderTime <= 5000
+    const animateOrder = trackChanges && !reducedMotion
+    const activeDrivers = new Set()
+    for (const car of rows) {
       const driver = Number(car[0])
+      const position = Number(car[3])
       const colour = /^#?[0-9a-f]{6}$/i.test(String(car[2] || '')) ? `#${String(car[2]).replace('#', '')}` : '#808080'
       const currentLap = finite(car[4]) ? Number(car[4]) : Number(frame.lap)
-      return `<div class="position-row${driver === Number(data.focus_driver) ? ' focus' : ''}"><span class="position-number">${escapeHtml(car[3])}</span><span class="team-mark" style="background:${escapeHtml(colour)}"></span><span class="driver-code">${escapeHtml(car[1])}</span><span class="tyre-history">${tyreHistory(driver, currentLap)}</span><span class="gap">${pitDrivers.has(driver) ? '<b class="pit-badge">PIT</b>' : escapeHtml(car[7])}</span></div>`
-    }).join('')
+      const previousPosition = previousPositions.get(driver)
+      const direction = trackChanges && Number.isFinite(previousPosition) && position !== previousPosition ? position < previousPosition ? 'gained' : 'lost' : ''
+      if (direction) positionSignals.set(driver, {direction, startedAt: performance.now()})
+      let signalState = positionSignals.get(driver)
+      const signalAge = signalState ? performance.now() - signalState.startedAt : 0
+      if (signalState && signalAge >= 700) {
+        positionSignals.delete(driver)
+        signalState = null
+      }
+      const signal = signalState?.direction === 'gained' ? `<span class="position-change gained" style="animation-delay:-${Math.round(signalAge)}ms" role="img" aria-label="Position gained">&#9650;</span>` : signalState?.direction === 'lost' ? `<span class="position-change lost" style="animation-delay:-${Math.round(signalAge)}ms" role="img" aria-label="Position lost">&#9660;</span>` : '<span class="position-change" aria-hidden="true"></span>'
+      const row = existingRows.get(driver) || container.ownerDocument.createElement('div')
+      row.className = `position-row${driver === Number(data.focus_driver) ? ' focus' : ''}`
+      row.dataset.driver = String(driver)
+      row.innerHTML = `${signal}<span class="position-number">${escapeHtml(position)}</span><span class="team-mark" style="background:${escapeHtml(colour)}"></span><span class="driver-code">${escapeHtml(car[1])}</span><span class="tyre-history">${tyreHistory(driver, currentLap)}</span><span class="gap">${pitDrivers.has(driver) ? '<b class="pit-badge">PIT</b>' : escapeHtml(car[7])}</span>`
+      container.appendChild(row)
+      activeDrivers.add(driver)
+      previousPositions.set(driver, position)
+    }
+    for (const [driver, row] of existingRows) {
+      if (activeDrivers.has(driver)) continue
+      row.remove()
+      previousPositions.delete(driver)
+      positionSignals.delete(driver)
+    }
+    if (animateOrder) {
+      for (const row of container.querySelectorAll('.position-row')) {
+        const driver = Number(row.dataset.driver)
+        const oldTop = oldTops.get(driver)
+        if (!Number.isFinite(oldTop)) continue
+        const offset = oldTop - row.getBoundingClientRect().top
+        if (Math.abs(offset) < 1) continue
+        const currentAnimation = positionAnimations.get(driver)
+        if (currentAnimation) currentAnimation.cancel()
+        const animation = row.animate(
+          [{transform: `translateY(${offset}px)`}, {transform: 'translateY(0)'}],
+          {duration: 700, easing: 'cubic-bezier(.2,.8,.2,1)'},
+        )
+        positionAnimations.set(driver, animation)
+        const removeAnimation = () => {
+          if (positionAnimations.get(driver) === animation) positionAnimations.delete(driver)
+        }
+        animation.onfinish = removeAnimation
+        animation.oncancel = removeAnimation
+      }
+    } else {
+      for (const animation of positionAnimations.values()) animation.cancel()
+      positionAnimations.clear()
+    }
+    lastPositionRenderTime = time
   }
 
   function renderSummary(frame, time) {
@@ -469,6 +533,9 @@ export default function(component) {
   const cleanup = () => {
     if (animationId != null) cancelAnimationFrame(animationId)
     if (notificationTimer) clearTimeout(notificationTimer)
+    for (const animation of positionAnimations.values()) animation.cancel()
+    positionAnimations.clear()
+    positionSignals.clear()
     mounted.delete(parentElement)
   }
   mounted.set(parentElement, cleanup)
