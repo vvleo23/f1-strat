@@ -18,7 +18,7 @@ from f1_pipeline.dashboard.re_live_component import render_re_live
 from f1_pipeline.dashboard.replay_service import build_replay_view
 from f1_pipeline.temporal import TemporalCutError, cut_facts
 
-REPLAY_CACHE_VERSION = 3
+REPLAY_CACHE_VERSION = 4
 
 
 @st.cache_data(show_spinner="Building historical replay…", max_entries=8)

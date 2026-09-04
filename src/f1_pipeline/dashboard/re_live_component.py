@@ -95,6 +95,7 @@ button { font: inherit; }
 .positions { overflow-y: auto; scrollbar-width: thin; scrollbar-color: #46505e transparent; }
 .position-row { min-height: 25px; display: grid; grid-template-columns: 12px 24px 5px 38px minmax(70px, 1fr) auto; align-items: center; gap: 5px; padding: 3px 9px; border-top: 1px solid #1e242d; font-size: 11px; will-change: transform; }
 .position-row.focus { background: rgba(78, 184, 235, .14); }
+.position-row.inactive { opacity: .48; filter: grayscale(.65); }
 .position-change { width: 12px; color: transparent; font-size: 11px; font-weight: 900; line-height: 1; text-align: center; }
 .position-change.gained { color: #21a366; animation: position-signal .7s ease both; }
 .position-change.lost { color: #e10600; animation: position-signal .7s ease both; }
@@ -109,6 +110,7 @@ button { font: inherit; }
 .tyre-unavailable { color: #66717f; font-size: 10px; }
 .gap { color: #d9dee6; font-variant-numeric: tabular-nums; }
 .pit-badge { border-radius: 4px; padding: 2px 4px; background: #735a00; color: #ffe182; font-size: 8px; font-weight: 850; }
+.out-badge { color: #a3abb6; font-size: 8px; font-weight: 850; letter-spacing: .08em; }
 .centre-panel { display: grid; grid-template-rows: 40px minmax(0, 1fr); }
 .view-tabs { display: flex; justify-content: center; gap: 6px; padding: 6px; border-bottom: 1px solid #292f39; }
 .tab, .speed, .play { border: 1px solid #343c49; border-radius: 7px; background: #161b24; color: #c9d0da; cursor: pointer; }
@@ -251,7 +253,7 @@ export default function(component) {
     return active
   }
 
-  function tyreHistory(driver, currentLap) {
+  function tyreHistory(driver, currentLap, inactive = false) {
     const compounds = {
       SOFT: {label: 'Soft', colour: '#e10600'},
       MEDIUM: {label: 'Medium', colour: '#ffd12f'},
@@ -266,7 +268,7 @@ export default function(component) {
       const style = compounds[compound] || {label: 'Unknown compound', colour: '#7f8a99'}
       const startLap = Number(stint.start_lap)
       const endLap = finite(stint.end_lap) ? Number(stint.end_lap) : null
-      const active = index === visible.length - 1 && (endLap == null || currentLap <= endLap)
+      const active = !inactive && index === visible.length - 1 && (endLap == null || currentLap <= endLap)
       const usedThrough = active ? currentLap : endLap
       const length = usedThrough == null ? null : Math.max(1, usedThrough - startLap + 1)
       const lengthText = length == null ? 'Length unavailable' : `${length} ${length === 1 ? 'lap' : 'laps'}${active ? ' so far' : ''}`
@@ -287,6 +289,7 @@ export default function(component) {
     const fragments = []
     let focusProgress = null
     for (const [driver, car] of fromCars) {
+      if (Boolean(car[12])) continue
       const next = toCars.get(driver) || car
       const progress = interpolateProgress(Number(car[5]), Number(next[5]), fraction)
       const point = pointAtProgress(selected.points, progress)
@@ -336,6 +339,7 @@ export default function(component) {
     for (const car of rows) {
       const driver = Number(car[0])
       const position = Number(car[3])
+      const inactive = Boolean(car[12])
       const colour = /^#?[0-9a-f]{6}$/i.test(String(car[2] || '')) ? `#${String(car[2]).replace('#', '')}` : '#808080'
       const currentLap = finite(car[4]) ? Number(car[4]) : Number(frame.lap)
       const previousPosition = previousPositions.get(driver)
@@ -349,9 +353,9 @@ export default function(component) {
       }
       const signal = signalState?.direction === 'gained' ? `<span class="position-change gained" style="animation-delay:-${Math.round(signalAge)}ms" role="img" aria-label="Position gained">&#9650;</span>` : signalState?.direction === 'lost' ? `<span class="position-change lost" style="animation-delay:-${Math.round(signalAge)}ms" role="img" aria-label="Position lost">&#9660;</span>` : '<span class="position-change" aria-hidden="true"></span>'
       const row = existingRows.get(driver) || container.ownerDocument.createElement('div')
-      row.className = `position-row${driver === Number(data.focus_driver) ? ' focus' : ''}`
+      row.className = `position-row${driver === Number(data.focus_driver) ? ' focus' : ''}${inactive ? ' inactive' : ''}`
       row.dataset.driver = String(driver)
-      row.innerHTML = `${signal}<span class="position-number">${escapeHtml(position)}</span><span class="team-mark" style="background:${escapeHtml(colour)}"></span><span class="driver-code">${escapeHtml(car[1])}</span><span class="tyre-history">${tyreHistory(driver, currentLap)}</span><span class="gap">${pitDrivers.has(driver) ? '<b class="pit-badge">PIT</b>' : escapeHtml(car[7])}</span>`
+      row.innerHTML = `${signal}<span class="position-number">${escapeHtml(position)}</span><span class="team-mark" style="background:${escapeHtml(colour)}"></span><span class="driver-code">${escapeHtml(car[1])}</span><span class="tyre-history">${tyreHistory(driver, currentLap, inactive)}</span><span class="gap">${inactive ? '<b class="out-badge">OUT</b>' : pitDrivers.has(driver) ? '<b class="pit-badge">PIT</b>' : escapeHtml(car[7])}</span>`
       container.appendChild(row)
       activeDrivers.add(driver)
       previousPositions.set(driver, position)

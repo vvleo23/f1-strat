@@ -11,7 +11,9 @@ import pandas as pd
 from f1_pipeline.replay.circle_of_doom import (
     build_location_progress,
     build_replay,
+    driver_is_inactive,
     estimate_reference_lap_time,
+    field_is_moving,
     infer_race_window,
     make_parquet_safe,
     reconstruct_absolute_gaps,
@@ -20,6 +22,78 @@ from f1_pipeline.replay.circle_of_doom import (
 
 
 class CircleOfDoomTest(unittest.TestCase):
+    def test_field_must_resume_before_inactivity_timer_runs(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-08-23T13:00:00Z"))
+        activity = {driver: (2.5, start, False) for driver in range(1, 11)}
+
+        self.assertFalse(
+            field_is_moving(
+                activity,
+                {driver: 2.5 for driver in range(1, 11)},
+                "GREEN",
+            )
+        )
+        self.assertTrue(
+            field_is_moving(
+                activity,
+                {
+                    driver: 2.51 if driver <= 5 else 2.5
+                    for driver in range(1, 11)
+                },
+                "GREEN",
+            )
+        )
+
+    def test_driver_becomes_inactive_only_after_green_stationary_timeout(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-08-23T13:00:00Z"))
+        activity: dict[int, tuple[float, pd.Timestamp, bool]] = {}
+
+        self.assertFalse(
+            driver_is_inactive(
+                activity,
+                driver_number=1,
+                race_progress=2.5,
+                frame_time=start,
+                status="GREEN",
+            )
+        )
+        self.assertFalse(
+            driver_is_inactive(
+                activity,
+                driver_number=1,
+                race_progress=2.5,
+                frame_time=start + timedelta(seconds=60),
+                status="RED",
+            )
+        )
+        self.assertFalse(
+            driver_is_inactive(
+                activity,
+                driver_number=1,
+                race_progress=2.5,
+                frame_time=start + timedelta(seconds=149),
+                status="GREEN",
+            )
+        )
+        self.assertTrue(
+            driver_is_inactive(
+                activity,
+                driver_number=1,
+                race_progress=2.5,
+                frame_time=start + timedelta(seconds=150),
+                status="GREEN",
+            )
+        )
+        self.assertFalse(
+            driver_is_inactive(
+                activity,
+                driver_number=1,
+                race_progress=2.51,
+                frame_time=start + timedelta(seconds=151),
+                status="GREEN",
+            )
+        )
+
     def test_make_parquet_safe_preserves_numeric_and_lapped_gaps(self) -> None:
         frame = pd.DataFrame(
             {"gap_to_leader": [0, 12.5, "+1 LAP", None], "interval": [0, 2.5, 5, None]}

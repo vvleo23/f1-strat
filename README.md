@@ -99,6 +99,7 @@ Last updated: **4 September 2026**
 - immutable OpenF1 endpoint snapshots, session manifests, and a combined weekend-facts manifest
 - canonical Silver `session_entry`, `lap`, `interval`, `position`, `pit_stop`, `stint`, `race_control_event`, `weather_observation`, `starting_grid`, `session_result`, `driver_championship_standing`, and `team_championship_standing` facts
 - read-only Streamlit season overview and session replay with point-in-time tyre-stint history backed by manifest-selected, hash-verified curated data
+- Re-Live inactivity handling that removes cars after 90 stationary green-flag seconds while retaining a dimmed `OUT` driver row and allowing later movement to reactivate the car
 - separate local HTTP job service with deterministic intents and persisted status for selected-session and Weekend Complete V1 actions
 - automatic manifest-bound local centerlines in season-partitioned geometry dimensions
 - leakage-free Circle-of-Doom replay with point-in-time reference pace, causal lap progress, released stint visibility, synthetic-circle default, and optional stored geometry
