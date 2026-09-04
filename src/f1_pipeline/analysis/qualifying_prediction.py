@@ -52,6 +52,20 @@ class PredictionResult:
     diagnostics: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class PredictionParameters:
+    practice_decay: float = 0.75
+    sprint_qualifying_weight: float = 1.25
+    sprint_weight: float = 0.35
+    weather_mismatch_multiplier: float = 0.25
+    missing_tyre_multiplier: float = 0.5
+    prior_weight: float = 0.25
+    missing_weather_uncertainty_multiplier: float = 1.5
+
+
+DEFAULT_PARAMETERS = PredictionParameters()
+
+
 def _project_path(value: str | Path) -> Path:
     path = Path(value)
     return path if path.is_absolute() else PROJECT_ROOT / path
@@ -298,18 +312,23 @@ def _weighted_median(values: Iterable[float], weights: Iterable[float]) -> float
     return pairs[-1][0]
 
 
-def _session_weights(sessions: list[SessionInput]) -> dict[int, float]:
+def _session_weights(
+    sessions: list[SessionInput], parameters: PredictionParameters
+) -> dict[int, float]:
     practices = sorted(
         (session for session in sessions if session.session_type == "practice"),
         key=lambda session: session.scheduled_start,
         reverse=True,
     )
-    weights = {session.session_key: 0.75**index for index, session in enumerate(practices)}
+    weights = {
+        session.session_key: parameters.practice_decay**index
+        for index, session in enumerate(practices)
+    }
     for session in sessions:
         if session.session_type == "sprint_qualifying":
-            weights[session.session_key] = 1.25
+            weights[session.session_key] = parameters.sprint_qualifying_weight
         elif session.session_type == "sprint":
-            weights[session.session_key] = 0.35
+            weights[session.session_key] = parameters.sprint_weight
     return weights
 
 
@@ -323,6 +342,7 @@ def calculate_prediction(
     forecast: pd.DataFrame,
     calibration: Calibration,
     calculation_id: str,
+    parameters: PredictionParameters = DEFAULT_PARAMETERS,
 ) -> PredictionResult:
     if not sessions:
         return PredictionResult(
@@ -334,7 +354,7 @@ def calculate_prediction(
     evidence_frames: list[pd.DataFrame] = []
     current_spread: list[float] = []
     session_errors: list[str] = []
-    weights = _session_weights(sessions)
+    weights = _session_weights(sessions, parameters)
     for session in sessions:
         try:
             best, spread = _best_laps(session, decision_time)
@@ -357,8 +377,10 @@ def calculate_prediction(
             & best["target_regime"].notna()
             & best["source_regime"].ne(best["target_regime"])
         )
-        best.loc[mismatch, "weight"] *= 0.25
-        best.loc[best["compound"].isna() | best["tyre_age_laps"].isna(), "weight"] *= 0.5
+        best.loc[mismatch, "weight"] *= parameters.weather_mismatch_multiplier
+        best.loc[
+            best["compound"].isna() | best["tyre_age_laps"].isna(), "weight"
+        ] *= parameters.missing_tyre_multiplier
         adjustments: list[float] = []
         pools: list[np.ndarray] = []
         for _, row in best.iterrows():
@@ -404,7 +426,7 @@ def calculate_prediction(
             prior = calibration.team_priors.get(team_name)
         if prior is not None:
             values.append(prior)
-            driver_weights.append(0.25)
+            driver_weights.append(parameters.prior_weight)
         if not values or not any(weight > 0 for weight in driver_weights):
             rows.append(
                 {
@@ -478,7 +500,7 @@ def calculate_prediction(
             residual_pool = np.array([-spread, 0.0, spread], dtype=float)
     uncertainty_multiplier = 1.0
     if target_weather["regime"] is None and residual_pool.size:
-        uncertainty_multiplier = 1.5
+        uncertainty_multiplier = parameters.missing_weather_uncertainty_multiplier
         residual_pool = residual_pool * uncertainty_multiplier
     probability_columns = (
         "top_15_probability",

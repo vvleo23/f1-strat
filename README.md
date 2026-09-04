@@ -49,7 +49,7 @@ flowchart LR
 | Historical event replay | Chronological race state for historical visualization | Pipeline and Dashboard V1 | Implemented with synchronized Re-Live panels and a strict prediction boundary |
 | Weather pipeline | Immutable Open-Meteo forecasts plus separate OpenF1/FastF1 observations | Pipeline MVP | Generic circuit-reference path implemented; forecast coverage depends on provider availability |
 | Season overview | Calendar, sessions, driver/team standings, wins, and podium counts | Dashboard V1 | Implemented from curated OpenF1 facts |
-| Qualifying calculation | Full predicted classification plus per-driver Top-15/Top-10/Top-5 probabilities | Later analysis | Transparent session-weighted baseline, Calculation Snapshots, job control, and read-only dashboard view implemented |
+| Qualifying calculation | Full predicted classification plus per-driver Top-15/Top-10/Top-5 probabilities | Later analysis | Transparent baseline and first manifest-backed walk-forward runner implemented; wider event and forecast coverage is still required |
 | Race calculation | Online strategy and pit-window recommendations from the current replay state | Post-V1 analysis | Planned |
 | Dashboard | Small read-only view of curated data, results, standings, replay, weather, and Race Control | Dashboard V1 | Season overview and single-screen Re-Live implemented |
 
@@ -116,6 +116,7 @@ Last updated: **4 September 2026**
 - The orchestrator and local job runner are restartable and idempotent; delayed retry scheduling and automatic finalization are not implemented.
 - Sprint session planning is implemented and unit-tested, but the current Hungary acceptance weekend has no Sprint.
 - Track centerlines are local OpenF1 display geometry, not geographic map geometry.
+- The first local qualifying walk-forward run scores only 5 of 14 completed 2026 main Qualifying sessions because required local manifests are missing for the others. It does not validate weather parameters because point-in-time forecast coverage is incomplete. On this small sample, the latest one-lap baseline has lower position error and better Top-N Brier scores than the calibrated model, so no production weights have been changed.
 
 ### Not implemented
 
@@ -426,7 +427,7 @@ The Analysis Dashboard is the single entry point. It shows every race weekend in
 | Year/weekend/session selection | Season control, discovered weekend cards, local weekend and session dialogs, validated CLI filters, and persisted job status | Delayed scheduling and automatic finalization |
 | Purpose-based loading | `weekend`, `weekend_complete_v1`, `replay`, `qualifying_prediction`, and `race_strategy` session plans; session-type endpoint profiles | Feature-level endpoint plans across all sources and automatic finalization |
 | Complete-weekend state | Red weekend-card frame when all discovered sessions have local data; `weekend_complete_v1` remains available through the service and CLI | Full matching FastF1 weekend, multiple forecast vintages, and retry queue |
-| Qualifying calculation | Leakage-free session-weighted baseline, local-history calibration, deterministic simulation, full classification, and Top-15/10/5 probabilities | Walk-forward quality reporting and later evidence-based model improvements |
+| Qualifying calculation | Leakage-free session-weighted baseline, local-history calibration, deterministic simulation, full classification, Top-15/10/5 probabilities, and a manifest-backed walk-forward runner | Broader event and point-in-time forecast coverage before evidence-based model changes |
 | Session Re-Live | Focus-driver selection before entry; synchronized Circle-of-Doom/stored centerline, order, tyre-stint history, pit state, weather, forecast, Race Control and playback controls | Persisted race-state service and later calculation panels |
 | Strategy recommendation | Pit, stint, interval, position, weather and race-state inputs | Versioned algorithm, pit window, alternatives, uncertainty and Calculation Snapshots |
 
@@ -586,6 +587,14 @@ Build a historical pre-session Qualifying Prediction through the controlled job 
 python -m f1_pipeline.job_runner --season 2026 --meeting-key 1291 --purpose qualifying_prediction --target-session-key 11338 --decision-time 2026-07-25T14:00:00Z
 ```
 
+Run the local qualifying walk-forward comparison without fetching new data:
+
+```bash
+python -m f1_pipeline.analysis.qualifying_backtest --season 2026 --as-of 2026-09-04T20:00:00Z
+```
+
+The backtest compares the latest one-lap baseline, equal session weights, the current weights with and without local calibration, a faster Practice decay, and removal of Sprint-race evidence. It writes row-level metrics, a summary, and a hashed Calculation Snapshot. Missing point-in-time forecasts remain missing and weather parameters are not scored implicitly with later observations.
+
 Generated verification JSON, replay HTML, geometry previews, and analysis files are written below `data/artifacts/`. They are reproducible outputs, not source data.
 
 Start the controlled local job service and the read-only dashboard from the repository root in separate terminals:
@@ -622,7 +631,7 @@ The CLI and local service use the same weekend orchestrator. Job status is persi
 5. **Implemented:** Remove replay leakage from reference pace, lap progress, and stint visibility; verify one strict `decision_time` cut.
 6. **Implemented:** Generalize Wikidata resolution and manifest-bound track geometry across OpenF1 seasons and circuits with fail-safe fallbacks.
 7. **Implemented for Qualifying:** Add immutable Calculation Snapshots with input hashes, versions, deterministic probability simulation, and manifest-backed dashboard reads.
-8. Add persisted retries, session finalization, and broader walk-forward quality reporting.
+8. **Partly implemented:** Add persisted retries, session finalization, and broader walk-forward quality reporting; the first local qualifying runner is available but source and forecast coverage remains incomplete.
 9. Implement the transparent online strategy algorithm and pit-window recommendation under versioned assumptions.
 10. Add race prediction and consider more complex qualifying models only after temporal backtests demonstrate value beyond the transparent baseline.
 

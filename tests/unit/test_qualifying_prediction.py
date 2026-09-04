@@ -6,6 +6,7 @@ import pandas as pd
 
 from f1_pipeline.analysis.qualifying_prediction import (
     Calibration,
+    PredictionParameters,
     SessionInput,
     calculate_prediction,
 )
@@ -188,6 +189,36 @@ class QualifyingPredictionTest(unittest.TestCase):
 
         self.assertEqual(result.status, "unavailable")
         self.assertTrue(result.rows.empty)
+
+    def test_practice_decay_can_isolate_the_latest_session_for_backtesting(self) -> None:
+        sessions = [
+            self.session(1, "2026-05-01T08:00:00Z", wet=False, reverse=True),
+            self.session(2, "2026-05-01T10:00:00Z", wet=False, reverse=True),
+            self.session(3, "2026-05-01T12:00:00Z", wet=False, reverse=False),
+        ]
+        arguments = {
+            "target_session_id": "openf1:session:4",
+            "target_start": pd.Timestamp("2026-05-02T14:00:00Z"),
+            "target_end": pd.Timestamp("2026-05-02T15:00:00Z"),
+            "decision_time": pd.Timestamp("2026-05-02T13:00:00Z"),
+            "forecast": self.forecast(),
+            "calibration": Calibration(pd.DataFrame(), {}, {}, {}),
+            "calculation_id": "0123456789abcdef0123",
+        }
+
+        equal = calculate_prediction(
+            sessions,
+            parameters=PredictionParameters(practice_decay=1.0),
+            **arguments,
+        )
+        latest = calculate_prediction(
+            sessions,
+            parameters=PredictionParameters(practice_decay=0.0),
+            **arguments,
+        )
+
+        self.assertEqual(int(equal.rows.iloc[0]["driver_number"]), 16)
+        self.assertEqual(int(latest.rows.iloc[0]["driver_number"]), 1)
 
 
 if __name__ == "__main__":
