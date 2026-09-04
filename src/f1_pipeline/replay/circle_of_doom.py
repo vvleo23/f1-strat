@@ -40,6 +40,9 @@ DEFAULT_GREEN_PIT_LOSS_SECONDS = 20.0
 DEFAULT_NEUTRALIZED_PIT_LOSS_SECONDS = 12.0
 DEFAULT_FRAME_SECONDS = 4
 DEFAULT_MAX_STALENESS_SECONDS = 8
+DEFAULT_INACTIVE_SECONDS = 90
+DEFAULT_PIT_EXIT_GRACE_SECONDS = 120
+MIN_MOVEMENT_PROGRESS = 0.0005
 PLAYBACK_SPEEDS = (1, 2, 5, 10)
 DATASET_ENDPOINTS = (
     "sessions",
@@ -87,6 +90,7 @@ class CarState:
     compound: str | None
     tyre_age: int | None
     recently_pitted: bool
+    inactive: bool = False
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,56 @@ class ReplayResult:
     reference_lap_time: float | None
     race_start: pd.Timestamp
     race_end: pd.Timestamp
+
+
+def driver_is_inactive(
+        activity: dict[int, tuple[float, pd.Timestamp, bool]],
+        *,
+        driver_number: int,
+        race_progress: float,
+        frame_time: pd.Timestamp,
+        status: str,
+        timeout_seconds: int = DEFAULT_INACTIVE_SECONDS,
+) -> bool:
+    previous = activity.get(driver_number)
+    last_movement = frame_time if previous is None else previous[1]
+    inactive = False if previous is None else previous[2]
+    moved = (
+        previous is None
+        or abs(race_progress - previous[0]) >= MIN_MOVEMENT_PROGRESS
+    )
+    if moved:
+        last_movement = frame_time
+        inactive = False
+    elif status in {"RED", "STOPPED"}:
+        last_movement = frame_time
+    else:
+        inactive = inactive or (
+            frame_time - last_movement >= timedelta(seconds=timeout_seconds)
+        )
+    activity[driver_number] = (race_progress, last_movement, inactive)
+    return inactive
+
+
+def field_is_moving(
+        activity: dict[int, tuple[float, pd.Timestamp, bool]],
+        progress_by_driver: dict[int, float],
+        status: str,
+) -> bool:
+    if status in {"RED", "STOPPED"}:
+        return False
+    comparable = [
+        (driver_number, progress)
+        for driver_number, progress in progress_by_driver.items()
+        if driver_number in activity
+    ]
+    if len(comparable) < 5:
+        return True
+    moving = sum(
+        abs(progress - activity[driver_number][0]) >= MIN_MOVEMENT_PROGRESS
+        for driver_number, progress in comparable
+    )
+    return moving >= max(3, math.ceil(len(comparable) / 2))
 
 
 class OpenF1Client(SharedOpenF1Client):
@@ -449,7 +503,10 @@ def project_pit_exit(
         reference_lap_time: float,
 ) -> PitProjection | None:
     """Projiziert Position und direkte Nachbarn nach einem sofortigen Stopp."""
-    car_list = sorted(cars, key=lambda car: car.absolute_gap)
+    car_list = sorted(
+        (car for car in cars if not car.inactive),
+        key=lambda car: car.absolute_gap,
+    )
     focus = next((car for car in car_list if car.driver_number == focus_driver), None)
     if focus is None:
         return None
@@ -983,7 +1040,20 @@ def build_replay(
         raise CircleOfDoomError(f"Driver {focus_driver} is not present in this session.")
 
     stint_lookup = _build_stint_lookup(datasets["stints"], datasets["laps"])
+    pit_grace: dict[int, list[tuple[pd.Timestamp, pd.Timestamp]]] = {}
+    if not datasets["pit"].empty and "date" in datasets["pit"].columns:
+        pits = datasets["pit"].copy()
+        pits["_pit_at"] = parse_openf1_datetimes(pits["date"])
+        for pit in cast(
+                list[dict[str, Any]],
+                pits.dropna(subset=["driver_number", "_pit_at"]).to_dict("records"),
+        ):
+            pit_at = cast(pd.Timestamp, pit["_pit_at"])
+            pit_grace.setdefault(int(pit["driver_number"]), []).append(
+                (pit_at, pit_at + timedelta(seconds=DEFAULT_PIT_EXIT_GRACE_SECONDS))
+            )
     frames: list[ReplayFrame] = []
+    driver_activity: dict[int, tuple[float, pd.Timestamp, bool]] = {}
 
     for date, snapshot in grid.groupby("date", sort=True):
         active = snapshot[
@@ -992,10 +1062,26 @@ def build_replay(
         if active.empty:
             continue
         frame_time = cast(pd.Timestamp, date)
+        status = (
+            str(active["status"].dropna().iloc[0])
+            if active["status"].notna().any()
+            else "GREEN"
+        )
         reference_lap_time = _reference_lap_time_at(
             datasets["laps"], datasets["pit"], frame_time
         )
         reconstructed = reconstruct_absolute_gaps(active, reference_lap_time)
+        frame_progress = {
+            int(record["driver_number"]): max(
+                0,
+                int(as_finite_float(record.get("lap_number")) or 1) - 1,
+            ) + float(record["track_progress"]) % 1.0
+            for record in reconstructed
+        }
+        activity_status = (
+            status if field_is_moving(driver_activity, frame_progress, status)
+            else "STOPPED"
+        )
         cars: list[CarState] = []
 
         for record in reconstructed:
@@ -1006,6 +1092,20 @@ def build_replay(
             )
             lap_value = as_finite_float(record.get("lap_number"))
             lap_number = max(1, int(lap_value)) if lap_value is not None else 1
+            lap_progress = float(record["track_progress"]) % 1.0
+            driver_status = activity_status
+            if any(
+                start <= frame_time <= end
+                for start, end in pit_grace.get(driver_number, [])
+            ):
+                driver_status = "STOPPED"
+            inactive = driver_is_inactive(
+                driver_activity,
+                driver_number=driver_number,
+                race_progress=lap_number - 1 + lap_progress,
+                frame_time=frame_time,
+                status=driver_status,
+            )
             compound, tyre_age = _tyre_at_lap(
                 stint_lookup, driver_number, lap_number, frame_time
             )
@@ -1026,20 +1126,20 @@ def build_replay(
                     team_colour=meta["team_colour"],
                     position=int(record["resolved_position"]),
                     lap_number=lap_number,
-                    lap_progress=float(record["track_progress"]) % 1.0,
+                    lap_progress=lap_progress,
                     absolute_gap=float(record["absolute_gap"]),
                     displayed_gap=displayed_gap,
                     interval=as_finite_float(record.get("interval")),
                     compound=compound,
                     tyre_age=tyre_age,
                     recently_pitted=pd.notna(record.get("pit_at")),
+                    inactive=inactive,
                 )
             )
 
         # A stable order is required for browser-side interpolation:
         # derselbe Array-Index muss in jedem Frame denselben Fahrer bezeichnen.
         cars.sort(key=lambda car: car.driver_number)
-        status = str(active["status"].dropna().iloc[0]) if active["status"].notna().any() else "GREEN"
         pit_loss = (
             neutralized_pit_loss if status in {"SC", "VSC"} else green_pit_loss
         )

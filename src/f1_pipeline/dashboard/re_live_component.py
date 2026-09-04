@@ -21,7 +21,7 @@ HTML = """
   <div class="dashboard-grid">
     <aside class="panel left-panel">
       <div class="race-summary"></div>
-      <div class="list-title"><span>Position</span><span>Gap</span></div>
+      <div class="list-title"><span>Position</span><span>Tyres</span><span>Gap</span></div>
       <div class="positions"></div>
     </aside>
     <main class="centre-panel">
@@ -91,16 +91,26 @@ button { font: inherit; }
 .status.neutralized { background: #a27100; }
 .status.stopped { background: #a92323; }
 .focus-copy { margin-top: 7px; color: #8fd8ff; font-size: 12px; }
-.list-title { display: grid; grid-template-columns: 1fr auto; align-items: center; padding: 5px 10px; color: #7f8a99; font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+.list-title { display: grid; grid-template-columns: 93px minmax(0, 1fr) auto; align-items: center; gap: 5px; padding: 5px 10px; color: #7f8a99; font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
 .positions { overflow-y: auto; scrollbar-width: thin; scrollbar-color: #46505e transparent; }
-.position-row { min-height: 25px; display: grid; grid-template-columns: 27px 7px 47px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 9px; border-top: 1px solid #1e242d; font-size: 11px; }
+.position-row { min-height: 25px; display: grid; grid-template-columns: 12px 24px 5px 38px minmax(70px, 1fr) auto; align-items: center; gap: 5px; padding: 3px 9px; border-top: 1px solid #1e242d; font-size: 11px; will-change: transform; }
 .position-row.focus { background: rgba(78, 184, 235, .14); }
+.position-row.inactive { opacity: .48; filter: grayscale(.65); }
+.position-change { width: 12px; color: transparent; font-size: 11px; font-weight: 900; line-height: 1; text-align: center; }
+.position-change.gained { color: #21a366; animation: position-signal .7s ease both; }
+.position-change.lost { color: #e10600; animation: position-signal .7s ease both; }
 .position-number { color: #8c96a5; text-align: right; }
 .team-mark { width: 5px; height: 17px; border-radius: 4px; }
 .driver-code { font-weight: 850; }
-.tyre { overflow: hidden; color: #9aa4b2; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.tyre-history { display: flex; min-width: 0; align-items: center; justify-content: flex-start; gap: 4px; }
+.tyre-icon { position: relative; width: 15px; height: 15px; flex: 0 0 15px; border: 3px solid var(--tyre-colour); border-radius: 50%; background: #080a0e; cursor: help; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+.tyre-icon::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: #202631; }
+.tyre-icon.active { box-shadow: 0 0 0 2px #8fd8ff, 0 0 7px rgba(143,216,255,.55), inset 0 0 0 1px rgba(255,255,255,.2); }
+.tyre-icon:focus-visible { outline: 2px solid #f4f7fb; outline-offset: 2px; }
+.tyre-unavailable { color: #66717f; font-size: 10px; }
 .gap { color: #d9dee6; font-variant-numeric: tabular-nums; }
 .pit-badge { border-radius: 4px; padding: 2px 4px; background: #735a00; color: #ffe182; font-size: 8px; font-weight: 850; }
+.out-badge { color: #a3abb6; font-size: 8px; font-weight: 850; letter-spacing: .08em; }
 .centre-panel { display: grid; grid-template-rows: 40px minmax(0, 1fr); }
 .view-tabs { display: flex; justify-content: center; gap: 6px; padding: 6px; border-bottom: 1px solid #292f39; }
 .tab, .speed, .play { border: 1px solid #343c49; border-radius: 7px; background: #161b24; color: #c9d0da; cursor: pointer; }
@@ -130,6 +140,8 @@ button { font: inherit; }
 .clock { font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
 .notification { position: absolute; left: 50%; bottom: 88px; max-width: 650px; transform: translateX(-50%) translateY(12px); opacity: 0; pointer-events: none; border: 1px solid #e2b53d; border-radius: 8px; background: rgba(24, 20, 8, .96); color: #ffe38a; padding: 10px 18px; font-size: 12px; font-weight: 800; text-align: center; transition: opacity .18s ease, transform .18s ease; }
 .notification.visible { transform: translateX(-50%) translateY(0); opacity: 1; }
+@keyframes position-signal { 0% { opacity: 0; transform: scale(.65); } 18%, 72% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.15); } }
+@media (prefers-reduced-motion: reduce) { .position-change.gained, .position-change.lost { animation: none; opacity: 1; } }
 @media (max-width: 1450px) { .dashboard-grid { grid-template-columns: 250px minmax(520px, 1fr) 285px; } .topbar { grid-template-columns: 105px 230px minmax(0, 1fr); } }
 """
 
@@ -153,9 +165,17 @@ export default function(component) {
   const endTime = frameTimes[frameTimes.length - 1]
   const sessionEnd = Date.parse(data.session?.end || data.race_end)
   const events = Array.isArray(data.race_control) ? data.race_control.map(event => ({...event, time: Date.parse(event.event_time), visibleTime: Math.max(Date.parse(event.event_time), Number(event.available_at_ms))})).filter(event => Number.isFinite(event.time) && Number.isFinite(event.visibleTime)).sort((a, b) => a.visibleTime - b.visibleTime) : []
-  const pits = Array.isArray(data.pits) ? data.pits.map(pit => ({...pit, time: Math.max(Date.parse(pit.event_time), Date.parse(pit.available_at || pit.event_time))})).filter(pit => Number.isFinite(pit.time)).sort((a, b) => a.time - b.time) : []
+  const pits = Array.isArray(data.pits) ? data.pits.map(pit => ({...pit, entry: Date.parse(pit.entry_time), exit: Date.parse(pit.exit_time || pit.event_time)})).filter(pit => Number.isFinite(pit.entry) && Number.isFinite(pit.exit) && pit.entry <= pit.exit).sort((a, b) => a.entry - b.entry) : []
   const observations = Array.isArray(data.weather_observations) ? data.weather_observations.map(row => ({...row, time: Date.parse(row.event_time), available: Date.parse(row.available_at || row.event_time)})).filter(row => Number.isFinite(row.time) && Number.isFinite(row.available)).sort((a, b) => a.time - b.time) : []
   const forecasts = Array.isArray(data.forecasts) ? data.forecasts.map(row => ({...row, valid: Date.parse(row.valid_time), available: Date.parse(row.available_at), initialized: Date.parse(row.run_initialized_at), windSpeedMs: finite(row.wind_speed) ? Number(row.wind_speed) / 3.6 : null, rainValue: finite(row.rain) ? Number(row.rain) : finite(row.precipitation) ? Number(row.precipitation) : null})).filter(row => Number.isFinite(row.valid) && Number.isFinite(row.available)).sort((a, b) => a.valid - b.valid) : []
+  const tyreStints = new Map()
+  for (const stint of Array.isArray(data.tyre_stints) ? data.tyre_stints : []) {
+    const driver = Number(stint.driver)
+    if (!Number.isFinite(driver) || !finite(stint.start_lap)) continue
+    if (!tyreStints.has(driver)) tyreStints.set(driver, [])
+    tyreStints.get(driver).push(stint)
+  }
+  for (const stints of tyreStints.values()) stints.sort((left, right) => Number(left.start_lap) - Number(right.start_lap) || Number(left.stint) - Number(right.stint))
   let currentTime = startTime
   let speed = 1
   let playing = false
@@ -166,6 +186,11 @@ export default function(component) {
   let lastPanelSecond = -1
   let notificationTimer = null
   let priorRaceTime = startTime
+  let previousPositions = new Map()
+  let lastPositionRenderTime = null
+  const positionAnimations = new Map()
+  const positionSignals = new Map()
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const timeline = query('.timeline')
   const playButton = query('.play')
   const trackButton = query('[data-view="track"]')
@@ -222,11 +247,36 @@ export default function(component) {
   function activePitDrivers(time) {
     const active = new Set()
     for (const pit of pits) {
-      if (pit.time > time) break
-      const supplied = finite(pit.lane_duration) ? Number(pit.lane_duration) : finite(pit.pit_duration) ? Number(pit.pit_duration) : Number(data.frame_seconds || 4)
-      if (time <= pit.time + supplied * 1000) active.add(Number(pit.driver_number))
+      if (pit.entry > time) break
+      if (time < pit.exit) active.add(Number(pit.driver_number))
     }
     return active
+  }
+
+  function tyreHistory(driver, currentLap, inactive = false) {
+    const compounds = {
+      SOFT: {label: 'Soft', colour: '#e10600'},
+      MEDIUM: {label: 'Medium', colour: '#ffd12f'},
+      HARD: {label: 'Hard', colour: '#f4f4f4'},
+      INTERMEDIATE: {label: 'Intermediate', colour: '#35b759'},
+      WET: {label: 'Wet', colour: '#2696ff'},
+    }
+    const visible = (tyreStints.get(driver) || []).filter(stint => Number(stint.start_lap) <= currentLap)
+    if (!visible.length) return '<span class="tyre-unavailable" title="Tyre data unavailable">-</span>'
+    return visible.map((stint, index) => {
+      const compound = String(stint.compound || 'UNKNOWN').toUpperCase()
+      const style = compounds[compound] || {label: 'Unknown compound', colour: '#7f8a99'}
+      const startLap = Number(stint.start_lap)
+      const endLap = finite(stint.end_lap) ? Number(stint.end_lap) : null
+      const active = !inactive && index === visible.length - 1 && (endLap == null || currentLap <= endLap)
+      const usedThrough = active ? currentLap : endLap
+      const length = usedThrough == null ? null : Math.max(1, usedThrough - startLap + 1)
+      const lengthText = length == null ? 'Length unavailable' : `${length} ${length === 1 ? 'lap' : 'laps'}${active ? ' so far' : ''}`
+      const rangeText = active ? `Lap ${startLap} - active` : endLap == null ? `From lap ${startLap}` : `Laps ${startLap}-${endLap}`
+      const ageText = finite(stint.tyre_age_at_start) ? ` - tyre age at start: ${Number(stint.tyre_age_at_start)} laps` : ''
+      const title = `${style.label} - stint ${stint.stint} - ${lengthText} - ${rangeText}${ageText}`
+      return `<span class="tyre-icon${active ? ' active' : ''}" style="--tyre-colour:${style.colour}" role="img" tabindex="0" aria-label="${escapeHtml(title)}" title="${escapeHtml(title)}"></span>`
+    }).join('')
   }
 
   function drawCars(index, fraction, time) {
@@ -239,6 +289,7 @@ export default function(component) {
     const fragments = []
     let focusProgress = null
     for (const [driver, car] of fromCars) {
+      if (Boolean(car[12])) continue
       const next = toCars.get(driver) || car
       const progress = interpolateProgress(Number(car[5]), Number(next[5]), fraction)
       const point = pointAtProgress(selected.points, progress)
@@ -279,12 +330,67 @@ export default function(component) {
   function renderPositions(frame, time) {
     const pitDrivers = activePitDrivers(time)
     const rows = [...frame.cars].sort((left, right) => Number(left[3]) - Number(right[3]))
-    query('.positions').innerHTML = rows.map(car => {
+    const container = query('.positions')
+    const existingRows = new Map(Array.from(container.querySelectorAll('.position-row')).map(row => [Number(row.dataset.driver), row]))
+    const oldTops = new Map(Array.from(existingRows, ([driver, row]) => [driver, row.getBoundingClientRect().top]))
+    const trackChanges = lastPositionRenderTime != null && time > lastPositionRenderTime && time - lastPositionRenderTime <= 5000
+    const animateOrder = trackChanges && !reducedMotion
+    const activeDrivers = new Set()
+    for (const car of rows) {
       const driver = Number(car[0])
+      const position = Number(car[3])
+      const inactive = Boolean(car[12])
       const colour = /^#?[0-9a-f]{6}$/i.test(String(car[2] || '')) ? `#${String(car[2]).replace('#', '')}` : '#808080'
-      const tyre = car[9] ? `${car[9]}${car[10] == null ? '' : ` · ${car[10]}L`}` : 'Tyre unavailable'
-      return `<div class="position-row${driver === Number(data.focus_driver) ? ' focus' : ''}"><span class="position-number">${escapeHtml(car[3])}</span><span class="team-mark" style="background:${escapeHtml(colour)}"></span><span class="driver-code">${escapeHtml(car[1])}</span><span class="tyre">${escapeHtml(tyre)}</span><span class="gap">${pitDrivers.has(driver) ? '<b class="pit-badge">PIT</b>' : escapeHtml(car[7])}</span></div>`
-    }).join('')
+      const currentLap = finite(car[4]) ? Number(car[4]) : Number(frame.lap)
+      const previousPosition = previousPositions.get(driver)
+      const direction = trackChanges && Number.isFinite(previousPosition) && position !== previousPosition ? position < previousPosition ? 'gained' : 'lost' : ''
+      if (direction) positionSignals.set(driver, {direction, startedAt: performance.now()})
+      let signalState = positionSignals.get(driver)
+      const signalAge = signalState ? performance.now() - signalState.startedAt : 0
+      if (signalState && signalAge >= 700) {
+        positionSignals.delete(driver)
+        signalState = null
+      }
+      const signal = signalState?.direction === 'gained' ? `<span class="position-change gained" style="animation-delay:-${Math.round(signalAge)}ms" role="img" aria-label="Position gained">&#9650;</span>` : signalState?.direction === 'lost' ? `<span class="position-change lost" style="animation-delay:-${Math.round(signalAge)}ms" role="img" aria-label="Position lost">&#9660;</span>` : '<span class="position-change" aria-hidden="true"></span>'
+      const row = existingRows.get(driver) || container.ownerDocument.createElement('div')
+      row.className = `position-row${driver === Number(data.focus_driver) ? ' focus' : ''}${inactive ? ' inactive' : ''}`
+      row.dataset.driver = String(driver)
+      row.innerHTML = `${signal}<span class="position-number">${escapeHtml(position)}</span><span class="team-mark" style="background:${escapeHtml(colour)}"></span><span class="driver-code">${escapeHtml(car[1])}</span><span class="tyre-history">${tyreHistory(driver, currentLap, inactive)}</span><span class="gap">${inactive ? '<b class="out-badge">OUT</b>' : pitDrivers.has(driver) ? '<b class="pit-badge">PIT</b>' : escapeHtml(car[7])}</span>`
+      container.appendChild(row)
+      activeDrivers.add(driver)
+      previousPositions.set(driver, position)
+    }
+    for (const [driver, row] of existingRows) {
+      if (activeDrivers.has(driver)) continue
+      row.remove()
+      previousPositions.delete(driver)
+      positionSignals.delete(driver)
+    }
+    if (animateOrder) {
+      for (const row of container.querySelectorAll('.position-row')) {
+        const driver = Number(row.dataset.driver)
+        const oldTop = oldTops.get(driver)
+        if (!Number.isFinite(oldTop)) continue
+        const offset = oldTop - row.getBoundingClientRect().top
+        if (Math.abs(offset) < 1) continue
+        const currentAnimation = positionAnimations.get(driver)
+        if (currentAnimation) currentAnimation.cancel()
+        const animation = row.animate(
+          [{transform: `translateY(${offset}px)`}, {transform: 'translateY(0)'}],
+          {duration: 700, easing: 'cubic-bezier(.2,.8,.2,1)'},
+        )
+        positionAnimations.set(driver, animation)
+        const removeAnimation = () => {
+          if (positionAnimations.get(driver) === animation) positionAnimations.delete(driver)
+        }
+        animation.onfinish = removeAnimation
+        animation.oncancel = removeAnimation
+      }
+    } else {
+      for (const animation of positionAnimations.values()) animation.cancel()
+      positionAnimations.clear()
+    }
+    lastPositionRenderTime = time
   }
 
   function renderSummary(frame, time) {
@@ -467,6 +573,9 @@ export default function(component) {
   const cleanup = () => {
     if (animationId != null) cancelAnimationFrame(animationId)
     if (notificationTimer) clearTimeout(notificationTimer)
+    for (const animation of positionAnimations.values()) animation.cancel()
+    positionAnimations.clear()
+    positionSignals.clear()
     mounted.delete(parentElement)
   }
   mounted.set(parentElement, cleanup)

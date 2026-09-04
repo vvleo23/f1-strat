@@ -18,6 +18,8 @@ from f1_pipeline.dashboard.re_live_component import render_re_live
 from f1_pipeline.dashboard.replay_service import build_replay_view
 from f1_pipeline.temporal import TemporalCutError, cut_facts
 
+REPLAY_CACHE_VERSION = 5
+
 
 @st.cache_data(show_spinner="Building historical replay…", max_entries=8)
 def replay_for(
@@ -28,7 +30,10 @@ def replay_for(
         focus_driver: int,
         decision_time: str,
         pit_loss_seconds: float | None,
+        cache_version: int,
 ):
+    if cache_version != REPLAY_CACHE_VERSION:
+        raise ValueError("Unsupported replay cache version.")
     return build_replay_view(
         session_key,
         season=season,
@@ -163,14 +168,27 @@ def _pit_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
         event_time = _timestamp(record.get("event_time"))
         if event_time is None:
             continue
+        pit_duration = _number(record.get("pit_duration_seconds"))
+        lane_duration = _number(record.get("lane_duration_seconds"))
+        interval_duration = lane_duration if lane_duration is not None else pit_duration
+        entry_time = (
+            (
+                pd.Timestamp(event_time)
+                - pd.to_timedelta(interval_duration, unit="s")
+            ).isoformat()
+            if interval_duration is not None and interval_duration >= 0
+            else None
+        )
         rows.append(
             {
                 "event_time": event_time,
                 "available_at": _timestamp(record.get("available_at")) or event_time,
+                "entry_time": entry_time,
+                "exit_time": event_time,
                 "driver_number": _number(record.get("driver_number")),
                 "lap_number": _number(record.get("lap_number")),
-                "pit_duration": _number(record.get("pit_duration_seconds")),
-                "lane_duration": _number(record.get("lane_duration_seconds")),
+                "pit_duration": pit_duration,
+                "lane_duration": lane_duration,
                 "stop_duration": _number(record.get("stop_duration_seconds")),
             }
         )
@@ -255,6 +273,7 @@ def render_session_replay(catalog: SeasonCatalog, session_key: int) -> None:
             int(focus_driver),
             decision_time.isoformat(),
             pit_loss.seconds if pit_loss is not None else None,
+            REPLAY_CACHE_VERSION,
         )
     except (DashboardDataError, ValueError, OSError) as exc:
         st.warning(f"Replay data is incomplete: {exc}")
@@ -290,6 +309,6 @@ def render_session_replay(catalog: SeasonCatalog, session_key: int) -> None:
     }
     render_re_live(
         payload,
-        key=f"re_live_{session_key}_{int(focus_driver)}",
+        key=f"re_live_{session_key}_{int(focus_driver)}_v{REPLAY_CACHE_VERSION}",
         on_back=_return_to_dashboard,
     )
