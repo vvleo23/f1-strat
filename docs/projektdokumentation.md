@@ -1,4 +1,4 @@
-# Projektdokumentation
+# Projektdokumentation - Doku
 
 Diese Datei ist die Grundlage für die spätere schriftliche Abgabe. Der verbindliche technische Stand, das MVP-Ziel, das Datenmodell und alle Ausführungsbefehle stehen ausschließlich in der [`README.md`](../README.md).
 
