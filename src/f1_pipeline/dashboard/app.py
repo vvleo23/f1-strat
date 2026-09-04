@@ -136,15 +136,6 @@ def _inject_styles() -> None:
         """
         <style>
         [data-testid="stSidebar"], [data-testid="collapsedControl"] { display: none; }
-        .st-key-home button {
-            border: 0;
-            background: transparent;
-            color: #e10600;
-            font-size: 1.65rem;
-            font-weight: 800;
-            padding: 0;
-        }
-        .st-key-home button:hover { color: #ff3b30; background: transparent; }
         div[class*="st-key-weekend_"] { min-height: 100%; }
         div[class*="st-key-weekend_"] div[data-testid="stVerticalBlockBorderWrapper"] {
             height: 100%;
@@ -261,15 +252,6 @@ def _inject_styles() -> None:
         """,
         unsafe_allow_html=True,
     )
-
-
-def _brand() -> None:
-    if st.button("F1-Strat", key="home", help="Return to the analysis dashboard"):
-        st.session_state["view"] = "dashboard"
-        st.session_state.pop("replay_session_key", None)
-        st.session_state.pop("active_session_dialog", None)
-        st.session_state.pop("active_meeting_dialog", None)
-        st.rerun()
 
 
 def _submit(payload: dict[str, Any], session_key: int) -> dict[str, Any] | None:
@@ -1673,7 +1655,6 @@ def main() -> None:
         except DashboardDataError as exc:
             st.error(str(exc))
         return
-    _brand()
     _dashboard(seasons)
 
 

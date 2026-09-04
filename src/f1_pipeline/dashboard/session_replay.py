@@ -18,6 +18,8 @@ from f1_pipeline.dashboard.re_live_component import render_re_live
 from f1_pipeline.dashboard.replay_service import build_replay_view
 from f1_pipeline.temporal import TemporalCutError, cut_facts
 
+REPLAY_CACHE_VERSION = 2
+
 
 @st.cache_data(show_spinner="Building historical replay…", max_entries=8)
 def replay_for(
@@ -28,7 +30,10 @@ def replay_for(
         focus_driver: int,
         decision_time: str,
         pit_loss_seconds: float | None,
+        cache_version: int,
 ):
+    if cache_version != REPLAY_CACHE_VERSION:
+        raise ValueError("Unsupported replay cache version.")
     return build_replay_view(
         session_key,
         season=season,
@@ -268,6 +273,7 @@ def render_session_replay(catalog: SeasonCatalog, session_key: int) -> None:
             int(focus_driver),
             decision_time.isoformat(),
             pit_loss.seconds if pit_loss is not None else None,
+            REPLAY_CACHE_VERSION,
         )
     except (DashboardDataError, ValueError, OSError) as exc:
         st.warning(f"Replay data is incomplete: {exc}")
@@ -303,6 +309,6 @@ def render_session_replay(catalog: SeasonCatalog, session_key: int) -> None:
     }
     render_re_live(
         payload,
-        key=f"re_live_{session_key}_{int(focus_driver)}",
+        key=f"re_live_{session_key}_{int(focus_driver)}_v{REPLAY_CACHE_VERSION}",
         on_back=_return_to_dashboard,
     )
