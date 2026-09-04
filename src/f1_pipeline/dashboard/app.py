@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from html import escape
@@ -121,6 +122,11 @@ def weather_status_for(session_keys: tuple[int, ...]) -> tuple[int, int | None]:
         if not weather.empty:
             return len(weather), session_key
     return 0, None
+
+
+@st.cache_data(show_spinner=False)
+def forecast_for(session_key: int) -> pd.DataFrame:
+    return load_forecast(session_key)
 
 
 @st.cache_data(show_spinner=False)
@@ -569,6 +575,105 @@ def _race_results_html(display: pd.DataFrame) -> str:
     )
 
 
+def _numeric(value: Any) -> float | None:
+    number = pd.to_numeric(value, errors="coerce")
+    return None if pd.isna(number) else float(number)
+
+
+def _circular_mean_degrees(from_degrees: float, to_degrees: float, fraction: float) -> float:
+    radians_from = math.radians(from_degrees)
+    radians_to = math.radians(to_degrees)
+    x = math.cos(radians_from) * (1 - fraction) + math.cos(radians_to) * fraction
+    y = math.sin(radians_from) * (1 - fraction) + math.sin(radians_to) * fraction
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def _interpolate_forecast(forecast: pd.DataFrame, target: pd.Timestamp) -> dict[str, Any] | None:
+    """Linearly interpolate the hourly Open-Meteo forecast at a target time.
+
+    Open-Meteo only publishes hourly points; a target between two hours is
+    blended from its two neighbours instead of snapping to the next full
+    hour. Wind direction is a circular quantity, so it is blended over the
+    shorter arc rather than interpolated as a plain number.
+    """
+    if forecast.empty:
+        return None
+    ordered = (
+        forecast.assign(
+            _valid_time=pd.to_datetime(forecast["valid_time"], utc=True, errors="coerce")
+        )
+        .dropna(subset=["_valid_time"])
+        .sort_values("_valid_time")
+    )
+    before = ordered[ordered["_valid_time"].le(target)].tail(1)
+    after = ordered[ordered["_valid_time"].gt(target)].head(1)
+    if before.empty or after.empty:
+        return None
+    before_row, after_row = before.iloc[0], after.iloc[0]
+    span = (after_row["_valid_time"] - before_row["_valid_time"]).total_seconds()
+    fraction = (
+        0.0
+        if span <= 0
+        else max(0.0, min(1.0, (target - before_row["_valid_time"]).total_seconds() / span))
+    )
+
+    def lerp(column: str) -> float | None:
+        left = _numeric(before_row.get(column))
+        right = _numeric(after_row.get(column))
+        return None if left is None or right is None else left + (right - left) * fraction
+
+    def rain_value(row: pd.Series) -> float | None:
+        value = _numeric(row.get("rain"))
+        return value if value is not None else _numeric(row.get("precipitation"))
+
+    before_rain, after_rain = rain_value(before_row), rain_value(after_row)
+    rain = (
+        None
+        if before_rain is None or after_rain is None
+        else before_rain + (after_rain - before_rain) * fraction
+    )
+    before_direction = _numeric(before_row.get("wind_direction_10m"))
+    after_direction = _numeric(after_row.get("wind_direction_10m"))
+    wind_direction = (
+        None
+        if before_direction is None or after_direction is None
+        else _circular_mean_degrees(before_direction, after_direction, fraction)
+    )
+    wind_speed_kmh = lerp("wind_speed_10m")
+    return {
+        "temperature": lerp("temperature_2m"),
+        "rain": rain,
+        "wind_speed_ms": None if wind_speed_kmh is None else wind_speed_kmh / 3.6,
+        "wind_direction": wind_direction,
+        "interpolated": 0.0001 < fraction < 0.9999,
+    }
+
+
+def _weekend_weather_table(sessions: pd.DataFrame, forecast: pd.DataFrame) -> pd.DataFrame:
+    """Forecast at each session's scheduled start, converted to m/s to match track observations."""
+    if forecast.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, Any]] = []
+    for _, session in sessions.sort_values("scheduled_start_utc").iterrows():
+        start = pd.to_datetime(session.get("scheduled_start_utc"), utc=True, errors="coerce")
+        if not isinstance(start, pd.Timestamp) or pd.isna(start):
+            continue
+        point = _interpolate_forecast(forecast, start)
+        if point is None:
+            continue
+        rows.append(
+            {
+                "Session": _session_label(session),
+                "Start (UTC)": start.strftime("%a %H:%M") + (" ≈" if point["interpolated"] else ""),
+                "Air °C": None if point["temperature"] is None else round(point["temperature"], 1),
+                "Rain mm": None if point["rain"] is None else round(point["rain"], 1),
+                "Wind m/s": None if point["wind_speed_ms"] is None else round(point["wind_speed_ms"], 1),
+                "Wind °": None if point["wind_direction"] is None else round(point["wind_direction"]),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _meeting_dialog(
         season: int,
         catalog: SeasonCatalog,
@@ -583,6 +688,10 @@ def _meeting_dialog(
     session_keys = tuple(source_session_key(value) for value in sessions["session_id"])
     loaded_count = sum(states[key].loaded for key in session_keys)
     weather_rows, weather_session_key = weather_status_for(session_keys)
+    weekend_forecast = (
+        forecast_for(weather_session_key) if weather_session_key is not None else pd.DataFrame()
+    )
+    weekend_weather_table = _weekend_weather_table(sessions, weekend_forecast)
     circuit_rows = catalog.circuits[
         catalog.circuits["circuit_id"].eq(meeting["circuit_id"])
     ]
@@ -702,6 +811,24 @@ def _meeting_dialog(
                     key=f"track_preview_{meeting_key}",
                 )
                 st.caption(geometry.label)
+
+        if not weekend_weather_table.empty:
+            st.markdown("#### Weekend forecast")
+            st.dataframe(
+                weekend_weather_table,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Session": st.column_config.TextColumn(width="small"),
+                    "Start (UTC)": st.column_config.TextColumn(width="small"),
+                },
+            )
+            st.caption(
+                "Open-Meteo hourly forecast at each session's scheduled start, "
+                "linearly interpolated between the two nearest hourly points "
+                "(≈) where the start falls between them. Wind converted to m/s "
+                "to match track observations."
+            )
 
         result_columns = st.columns(2, gap="large")
         if not qualifying_results.empty:
