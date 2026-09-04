@@ -19,7 +19,7 @@ from f1_pipeline.planning import (
     SessionPlanningError,
     plan_sessions_for_purpose,
 )
-from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
+from f1_pipeline.persistence import atomic_json, atomic_parquet, file_lock, sha256
 from f1_pipeline.settings import CURATED_DATA_DIR, PROJECT_ROOT
 from f1_pipeline.sources.open_meteo import (
     OpenMeteoError,
@@ -89,7 +89,21 @@ def _load_master_outputs(
     }
     if season == 2026 and not refresh and all(path.exists() for path in legacy.values()):
         return legacy
-    return load_master_data(season, refresh=refresh, client=client)
+    # Different meetings in the same season share these season-wide
+    # dimension files. Without this lock, two weekend jobs started at the
+    # same time (e.g. two "load weekend" clicks for different race
+    # weekends) can both rebuild and overwrite them concurrently. The lock
+    # only serializes the writers; it does not skip the redundant rebuild
+    # once a waiting job proceeds, which is an accepted trade-off for a
+    # single-user tool.
+    lock_path = outputs["manifest"]
+    try:
+        with file_lock(lock_path, timeout_seconds=120.0):
+            return load_master_data(season, refresh=refresh, client=client)
+    except TimeoutError as exc:
+        raise WeekendWeatherPipelineError(
+            f"Could not update season {season} master data: {exc}"
+        ) from exc
 
 
 def _selected_meeting_context(outputs: dict[str, Path], meeting_key: int) -> dict[str, Any]:
@@ -251,41 +265,53 @@ def _enrich_circuit(
         legacy_path: Path | None = None,
         manifest_path: Path | None = None,
 ) -> None:
-    circuits = pd.read_parquet(path)
-    mask = circuits["source_circuit_key"].eq(reference.source_circuit_key)
-    if len(circuits.loc[mask]) != 1:
+    # `circuit.parquet` holds every circuit of the season in one file. This
+    # is a read-modify-write of the whole file for a single row, so two
+    # different weekends (different circuits) enriching concurrently can
+    # each read before the other writes; whichever writes last silently
+    # discards the other's enrichment. The lock forces the two updates to
+    # serialize instead of interleave.
+    try:
+        with file_lock(path, timeout_seconds=30.0):
+            circuits = pd.read_parquet(path)
+            mask = circuits["source_circuit_key"].eq(reference.source_circuit_key)
+            if len(circuits.loc[mask]) != 1:
+                raise WeekendWeatherPipelineError(
+                    f"Circuit key {reference.source_circuit_key} was not found uniquely in Silver."
+                )
+            values = {
+                "wikidata_entity_id": reference.wikidata_entity_id,
+                "reference_latitude": reference.latitude,
+                "reference_longitude": reference.longitude,
+                "reference_crs": reference.crs,
+                "coordinate_revision": reference.coordinate_revision,
+                "coordinate_retrieved_at": reference.coordinate_retrieved_at,
+                "coordinate_verification_status": reference.verification_status,
+                "coordinate_raw_path": reference.raw_path,
+                "coordinate_sha256": reference.raw_sha256,
+            }
+            enriched = circuits.copy()
+            for column, value in values.items():
+                if column not in enriched.columns:
+                    enriched[column] = None
+                enriched.loc[mask, column] = value
+            if not enriched.equals(circuits):
+                atomic_parquet(enriched, path)
+            if legacy_path is not None:
+                if legacy_path != path:
+                    atomic_parquet(enriched, legacy_path)
+            if manifest_path is not None and manifest_path.is_file():
+                with manifest_path.open(encoding="utf-8") as stream:
+                    manifest = json.load(stream)
+                circuit_table = manifest.get("tables", {}).get("circuit")
+                if isinstance(circuit_table, dict):
+                    circuit_table["row_count"] = len(enriched)
+                    circuit_table["sha256"] = sha256(path)
+                    atomic_json(manifest, manifest_path)
+    except TimeoutError as exc:
         raise WeekendWeatherPipelineError(
-            f"Circuit key {reference.source_circuit_key} was not found uniquely in Silver."
-        )
-    values = {
-        "wikidata_entity_id": reference.wikidata_entity_id,
-        "reference_latitude": reference.latitude,
-        "reference_longitude": reference.longitude,
-        "reference_crs": reference.crs,
-        "coordinate_revision": reference.coordinate_revision,
-        "coordinate_retrieved_at": reference.coordinate_retrieved_at,
-        "coordinate_verification_status": reference.verification_status,
-        "coordinate_raw_path": reference.raw_path,
-        "coordinate_sha256": reference.raw_sha256,
-    }
-    enriched = circuits.copy()
-    for column, value in values.items():
-        if column not in enriched.columns:
-            enriched[column] = None
-        enriched.loc[mask, column] = value
-    if not enriched.equals(circuits):
-        atomic_parquet(enriched, path)
-    if legacy_path is not None:
-        if legacy_path != path:
-            atomic_parquet(enriched, legacy_path)
-    if manifest_path is not None and manifest_path.is_file():
-        with manifest_path.open(encoding="utf-8") as stream:
-            manifest = json.load(stream)
-        circuit_table = manifest.get("tables", {}).get("circuit")
-        if isinstance(circuit_table, dict):
-            circuit_table["row_count"] = len(enriched)
-            circuit_table["sha256"] = sha256(path)
-            atomic_json(manifest, manifest_path)
+            f"Could not update circuit dimension: {exc}"
+        ) from exc
 
 
 def _overall_status(jobs: dict[str, dict[str, Any]]) -> str:

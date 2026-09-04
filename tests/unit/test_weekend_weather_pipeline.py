@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from f1_pipeline.sources.open_meteo import (
 )
 from f1_pipeline.sources.weekend_weather_pipeline import (
     WeekendWeatherPipelineError,
+    _enrich_circuit,
     run_weekend_weather_pipeline,
     select_weekend_sessions,
 )
@@ -539,6 +541,72 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                 master_manifest["tables"]["circuit"]["sha256"],
                 sha256(circuit_path),
             )
+
+    def test_concurrent_circuit_enrichment_does_not_lose_either_update(self) -> None:
+        # Regression test for the reported "a new job silently undoes an
+        # older one" behaviour: two weekend jobs enriching DIFFERENT
+        # circuits in the shared season-wide circuit.parquet used to be able
+        # to race, with whichever job wrote last discarding the other job's
+        # enrichment (reproduced before the fix by forcing both threads to
+        # read before either wrote). `file_lock` inside `_enrich_circuit`
+        # now makes that interleaving impossible: the second thread cannot
+        # even start reading until the first has fully written and released
+        # the lock, so running the two updates genuinely concurrently and
+        # asserting neither is lost is itself the regression proof.
+        with tempfile.TemporaryDirectory() as temporary:
+            circuit_path = Path(temporary) / "circuit.parquet"
+            pd.DataFrame(
+                [
+                    {
+                        "circuit_id": "openf1:circuit:7",
+                        "source_circuit_key": 7,
+                        "circuit_name": "Spa-Francorchamps",
+                    },
+                    {
+                        "circuit_id": "openf1:circuit:55",
+                        "source_circuit_key": 55,
+                        "circuit_name": "Zandvoort",
+                    },
+                ]
+            ).to_parquet(circuit_path, index=False)
+
+            def reference(source_circuit_key: int, entity_id: str) -> CircuitReference:
+                return CircuitReference(
+                    source_circuit_key=source_circuit_key,
+                    wikidata_entity_id=entity_id,
+                    circuit_label=entity_id,
+                    latitude=50.0,
+                    longitude=5.0,
+                    crs="EPSG:4326",
+                    coordinate_revision=1,
+                    coordinate_retrieved_at="2026-01-01T00:00:00Z",
+                    verification_status="reviewed",
+                    raw_path="unused",
+                    raw_sha256="unused",
+                )
+
+            errors: list[Exception] = []
+
+            def run(circuit_reference: CircuitReference) -> None:
+                try:
+                    _enrich_circuit(circuit_path, circuit_reference)
+                except Exception as exc:  # pragma: no cover - surfaced via errors
+                    errors.append(exc)
+
+            first = threading.Thread(target=run, args=(reference(7, "Q172851"),))
+            second = threading.Thread(target=run, args=(reference(55, "Q173083"),))
+            first.start()
+            second.start()
+            first.join()
+            second.join()
+
+            self.assertEqual(errors, [])
+            result = pd.read_parquet(circuit_path)
+            enriched = result[result["wikidata_entity_id"].notna()]
+            self.assertEqual(
+                sorted(enriched["wikidata_entity_id"]), ["Q172851", "Q173083"]
+            )
+            self.assertFalse(circuit_path.with_suffix(".parquet.lock").exists())
 
 
 if __name__ == "__main__":

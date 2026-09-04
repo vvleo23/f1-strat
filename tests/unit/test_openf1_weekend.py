@@ -9,7 +9,10 @@ import pandas as pd
 
 from f1_pipeline.persistence import sha256
 from f1_pipeline.sources.openf1_weekend import (
+    ALLOW_EMPTY,
+    EMPTY_ON_404,
     OpenF1WeekendError,
+    _session_status,
     ingest_session,
     plan_weekend_sessions,
 )
@@ -159,7 +162,13 @@ class OpenF1WeekendTest(unittest.TestCase):
             def __init__(self, failed_endpoint: str | None = None) -> None:
                 self.failed_endpoint = failed_endpoint
 
-            def get_json(self, endpoint: str, params: dict[str, object]) -> list[dict[str, object]]:
+            def get_json(
+                self,
+                endpoint: str,
+                params: dict[str, object],
+                *,
+                treat_404_as_empty: bool = False,
+            ) -> list[dict[str, object]]:
                 self.assert_session_key(params)
                 if endpoint == self.failed_endpoint:
                     raise OpenF1WeekendError(f"{endpoint} unavailable")
@@ -172,7 +181,11 @@ class OpenF1WeekendTest(unittest.TestCase):
 
         class NoNetworkClient:
             def get_json(
-                self, endpoint: str, params: dict[str, object]
+                self,
+                endpoint: str,
+                params: dict[str, object],
+                *,
+                treat_404_as_empty: bool = False,
             ) -> list[dict[str, object]]:
                 raise AssertionError(f"Unexpected request: {endpoint} {params}")
 
@@ -252,7 +265,11 @@ class OpenF1WeekendTest(unittest.TestCase):
 
         class FakeClient:
             def get_json(
-                    self, endpoint: str, params: dict[str, object]
+                    self,
+                    endpoint: str,
+                    params: dict[str, object],
+                    *,
+                    treat_404_as_empty: bool = False,
             ) -> list[dict[str, object]]:
                 calls.append((endpoint, params))
                 if endpoint == "drivers":
@@ -300,6 +317,77 @@ class OpenF1WeekendTest(unittest.TestCase):
                     ("location", {"session_key": 42, "driver_number": 2}),
                 ],
             )
+
+    def test_starting_grid_requests_opt_into_treat_404_as_empty(self) -> None:
+        # OpenF1 returns HTTP 404 for `starting_grid` on every checked race
+        # session; the real client converts that into an empty list only
+        # when this flag is set. A regression here would silently go back to
+        # treating every race weekend as `partial`.
+        seen: dict[str, bool] = {}
+
+        class FakeClient:
+            def get_json(
+                self,
+                endpoint: str,
+                params: dict[str, object],
+                *,
+                treat_404_as_empty: bool = False,
+            ) -> list[dict[str, object]]:
+                seen[endpoint] = treat_404_as_empty
+                if endpoint == "sessions":
+                    return [
+                        {
+                            "session_key": 42,
+                            "meeting_key": 7,
+                            "session_name": "Race",
+                            "date_start": "2026-07-26T13:00:00Z",
+                        }
+                    ]
+                return []
+
+        plan = {
+            "session_id": "openf1:session:42",
+            "source_session_key": 42,
+            "normalized_session_type": "race",
+            "required_endpoints": ["sessions"],
+            "optional_endpoints": ["starting_grid"],
+            "skipped_endpoints": [],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ingest_session(
+                plan,
+                client=FakeClient(),
+                refresh=True,
+                raw_dir=root / "raw",
+                curated_dir=root / "curated",
+            )
+
+        self.assertTrue(seen["starting_grid"])
+        self.assertFalse(seen["sessions"])
+
+    def test_optional_empty_allowed_endpoint_does_not_downgrade_status(self) -> None:
+        # starting_grid (and intervals/pit/race_control) legitimately having
+        # nothing to report must not read as a failed load.
+        result = {"status": "available", "empty": True}
+        self.assertIn("starting_grid", ALLOW_EMPTY)
+        self.assertEqual(
+            _session_status(set(), {"starting_grid"}, {"starting_grid": result}),
+            "available",
+        )
+        self.assertIn("starting_grid", EMPTY_ON_404)
+
+    def test_optional_empty_non_allowed_endpoint_still_marks_partial(self) -> None:
+        # An empty optional endpoint that is NOT in ALLOW_EMPTY (for example
+        # session_result before a race is finalized) must still downgrade
+        # the session to `partial` -- only the explicitly allowed endpoints
+        # are exempt.
+        result = {"status": "available", "empty": True}
+        self.assertNotIn("session_result", ALLOW_EMPTY)
+        self.assertEqual(
+            _session_status(set(), {"session_result"}, {"session_result": result}),
+            "partial",
+        )
 
 
 if __name__ == "__main__":

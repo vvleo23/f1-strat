@@ -23,7 +23,13 @@ class OpenF1Error(RuntimeError):
 
 
 class JsonClient(Protocol):
-    def get_json(self, endpoint: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    def get_json(
+        self,
+        endpoint: str,
+        params: dict[str, Any],
+        *,
+        treat_404_as_empty: bool = False,
+    ) -> list[dict[str, Any]]:
         ...
 
 
@@ -57,7 +63,13 @@ class OpenF1Client:
         self.session.headers.update({"User-Agent": user_agent})
         self._last_request_at = 0.0
 
-    def get_json(self, endpoint: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    def get_json(
+        self,
+        endpoint: str,
+        params: dict[str, Any],
+        *,
+        treat_404_as_empty: bool = False,
+    ) -> list[dict[str, Any]]:
         elapsed = time.monotonic() - self._last_request_at
         if elapsed < MIN_REQUEST_INTERVAL_SECONDS:
             time.sleep(MIN_REQUEST_INTERVAL_SECONDS - elapsed)
@@ -75,6 +87,8 @@ class OpenF1Client:
                 time.sleep(5 * (attempt + 1))
             if response is None:
                 raise self._error_type(f"OpenF1 endpoint '{endpoint}' returned no response.")
+            if treat_404_as_empty and response.status_code == 404:
+                return []
             response.raise_for_status()
             payload = response.json()
         except requests.exceptions.Timeout as exc:
