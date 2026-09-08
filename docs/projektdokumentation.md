@@ -681,3 +681,70 @@ Neue technische Fähigkeiten werden zuerst im Status und in der Roadmap der [`RE
 
   Der eigentliche Mehrwert ist damit weniger ein vermeintlich überlegenes Strategiemodell als die nachvollziehbare,
   reproduzierbare und zeitlich korrekte Wetterdatenbasis, auf der spätere Strategiemodelle aufbauen können.
+
+## Schwächen
+
+Die wichtigsten Schwächen sind:
+
+  - Kein echter Live-Betrieb: Die Pipeline verarbeitet endliche Snapshots. Der Replay simuliert einen Datenstrom aus
+    historischen Daten.
+
+  - Keine garantierte Verfügbarkeit: OpenF1 und FastF1 sind inoffizielle Quellen ohne SLA. Daten können fehlen, verspätet
+    erscheinen oder ihr Schema ändern.
+
+  - Historische Verfügbarkeit teilweise rekonstruiert: Für historische OpenF1-Ereignisse kennen wir nicht immer den
+    tatsächlichen damaligen Veröffentlichungszeitpunkt. available_at ist deshalb teilweise abgeleitet.
+
+  - Forecast-Verfügbarkeit nur angenähert: Die Sechs-Stunden-Regel für historische ECMWF-Modellläufe ist konservativ, aber
+    kein Beleg, wann der Lauf damals wirklich öffentlich verfügbar war.
+
+  - Keine Live-Forecast-Historie: Wirklich belastbare Point-in-Time-Nachweise entstehen erst, wenn wir Forecasts vor
+    zukünftigen Sessions selbst zu T−24 h, T−6 h und T−1 h speichern.
+
+  - Grobe Wetterauflösung: Open-Meteo liefert überwiegend stündliche Modellwerte eines Gridpunkts. Lokale Regenschauer und
+    kurzfristige Wetterwechsel an einzelnen Streckenabschnitten können fehlen.
+
+  - Keine Regenradardaten: Radar ist bewusst ausgeschlossen. Gerade Regenbeginn, Intensität und Abtrocknung lassen sich daher
+    nur eingeschränkt abbilden.
+
+  - Messwerte nur bedingt vergleichbar: Open-Meteo verwendet temperature_2m; bei OpenF1 fehlen genaue Angaben zu Sensorhöhe
+    und Sensorposition. Ein fester Temperatur-Offset ist nicht begründbar.
+
+  - Kleine Wetterstichprobe: Fünf Sessions reichen weder für einen globalen noch für einen länderspezifischen
+    Korrekturfaktor.
+
+  - Begrenzte Validierung: Der Hungaroring ist der Hauptakzeptanzfall. Einzelne weitere Rennen prüfen Sonderfälle, belegen
+    aber noch keine allgemeine Robustheit über mehrere Saisons.
+
+  - FastF1 nur als eingeschränkter Cross-Check: FastF1 ist teilweise später verfügbar, deckt aktuell nur ausgewählte Daten ab
+    und ist keine vollständig unabhängige offizielle Referenz.
+
+  - Fehlende professionelle Daten: Teamtelemetrie, genaue Reifenmodelle, Streckenzustand, Fahrzeugparameter, lokale
+    Wettersensoren und kommerzielle Wetterprognosen stehen nicht zur Verfügung.
+
+  - Race-Control-Daten sind semi-strukturiert: Meldungen ersetzen keinen vollständigen offiziellen Steward-Feed. VSC-, SC-
+    und Rotphasen müssen teilweise heuristisch interpretiert werden.
+
+  - Keine belastbare Strategieempfehlung: Die Pipeline kann Situationen analysieren, beweist aber noch nicht, welche
+    alternative Strategie tatsächlich besser gewesen wäre.
+
+  - Noch kein produktiver Scheduler: Persistente Retry-Queue, automatische Finalisierung und dauerhafter Hintergrundbetrieb
+    fehlen.
+
+  - Reproduzierbarkeit noch nicht vollständig: Die Python-Abhängigkeiten sind aktuell nicht vollständig fixiert; eine spätere
+    Installation könnte andere Bibliotheksversionen erhalten.
+
+  - Lokale statt skalierbare Infrastruktur: Dateibasierte Parquet-/JSON-Ablage und lokaler Job-Service reichen für den PoC,
+    aber nicht ohne Weiteres für parallelen, verteilten Dauerbetrieb.
+
+  - Keine kommerzielle Nutzungsgarantie: Kostenlose Zugänge besitzen Rate Limits und können ihre Nutzungsbedingungen oder
+    Verfügbarkeit ändern.
+
+  Eine passende kritische Zusammenfassung für die Abgabe wäre:
+
+  > Die Umsetzung demonstriert eine reproduzierbare historische Datenpipeline, jedoch kein produktives Live-Strategiesystem. 
+  > Kostenlose öffentliche Quellen ermöglichen die nachträgliche Analyse von Rennwochenenden, bieten aber keine garantierte  
+  > Echtzeitverfügbarkeit, vollständige Telemetrie oder verbindliche Servicequalität. Historische Ereignis- und Forecast-    
+  > Verfügbarkeiten müssen teilweise rekonstruiert werden. Insbesondere Wetterdaten besitzen eine gröbere räumliche und      
+  > zeitliche Auflösung als professionelle streckenseitige Mess- und Radarsysteme. Die Ergebnisse sind daher als technischer 
+  > Machbarkeitsnachweis und nicht als unmittelbar einsetzbare Strategieempfehlung zu verstehen.  
