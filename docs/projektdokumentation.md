@@ -557,3 +557,127 @@ Neue technische Fähigkeiten werden zuerst im Status und in der Roadmap der [`RE
 - TUMFTM Race Simulation: <https://github.com/TUMFTM/race-simulation>
 - F1/AWS Qualifying Pace: <https://aws.amazon.com/blogs/machine-learning/predicting-qualification-ranking-based-on-practice-session-performance-for-formula-1-grand-prix/>
 - F1 Picks Predictor: <https://github.com/eddmann/f1-picks-2025-predictor>
+
+
+## Konkurrenzbetrachtung
+
+ Professionelle Motorsportlösungen ignorieren Wetter nicht. Viele freie und Open-Source-Projekte
+  berücksichtigen es dagegen gar nicht oder nur als vereinfachtes Simulationsszenario. Eine öffentlich nachvollziehbare,
+  zeitlich korrekte Verbindung von Wettervorhersage, Beobachtung und Rennstrategie ist selten.
+
+   Projekt/Produkt                           Typ                                      Berücksichtigung des Wetters           
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   TUMFTM Race Simulation (https://          Open Source, wissenschaftlich            Reifer Rennstrategiesimulator, aber
+   github.com/TUMFTM/race-simulation)                                                 der trainierte „Virtual Strategy
+                                                                                      Engineer“ schließt teilweise nasse
+                                                                                      Rennen ausdrücklich aus und
+                                                                                      verarbeitet nur Trockenreifen.
+  ────────────────────────────────────────  ───────────────────────────────────────  ────────────────────────────────────────
+   TUMFTM Lap-Time Simulation (https://      Open Source                              Nutzt mit mu_weather einen statischen
+   github.com/TUMFTM/laptime-simulation/                                              Faktor für verringerte Haftung. Das
+   blob/master/main_laptimesim.py)                                                    ist keine zeitabhängige
+                                                                                      Wettervorhersage.
+  ────────────────────────────────────────  ───────────────────────────────────────  ────────────────────────────────────────
+   F1 StratLab (https://github.com/          Open Source, Apache-2.0                  Bezieht Wetter als Strategiekontext
+   VforVitorio/F1-StratLab)                                                           ein und nutzt FastF1/OpenF1. Eine
+                                                                                      versionierte Point-in-Time-Forecast-
+                                                                                      Pipeline ist öffentlich bislang nicht
+                                                                                      erkennbar.
+  ────────────────────────────────────────  ───────────────────────────────────────  ────────────────────────────────────────
+   Pit Stop Simulator (https://              Open Source                              Simuliert Regenwahrscheinlichkeit,
+   github.com/rembertdesigns/pit-stop-                                                Intensität, Temperatur und
+   simulator)                                                                         Regenreifen. Das Wetter ist jedoch
+                                                                                      synthetisch konfiguriert und stammt
+                                                                                      nicht aus historischen Prognose-
+                                                                                      Snapshots.
+  ────────────────────────────────────────  ───────────────────────────────────────  ────────────────────────────────────────
+   Slipstream F1 Strategist (https://        Open Source, MIT                         Die API kennt derzeit im Wesentlichen
+   github.com/prateekmulye/slipstream-f1-                                             einen Zustand wie weather: "dry";
+   strategist)                                                                        weitergehende Wettereffekte werden als
+                                                                                      zukünftige Erweiterung geführt.
+  ────────────────────────────────────────  ───────────────────────────────────────  ────────────────────────────────────────
+   F1 Strategy Simulator (https://           Kostenloses Webwerkzeug                  Schließt Wetter, Streckenentwicklung,
+   www.f1strategysim.com/)                                                            Verkehr und Safety Cars ausdrücklich
+                                                                                      aus.
+  ────────────────────────────────────────  ───────────────────────────────────────  ────────────────────────────────────────
+   F1Grid Race Telemetry (https://           Kostenlos, Open Source                   Zeigt Wetter zusammen mit Telemetrie
+   f1grid.org/)                                                                       und Replay-Daten. Ob Wetterprognosen
+                                                                                      tatsächlich in die
+                                                                                      Strategieoptimierung eingehen, ist
+                                                                                      öffentlich nicht belegt.
+  ────────────────────────────────────────  ───────────────────────────────────────  ────────────────────────────────────────
+   PITWALL (https://www.pitwall-lab.com/)    Kostenloses Webwerkzeug                  Bietet simulierte
+                                                                                      Regenwahrscheinlichkeit und
+                                                                                      -intensität sowie SC/VSC- und Red-
+                                                                                      Flag-Szenarien.
+  ────────────────────────────────────────  ───────────────────────────────────────  ────────────────────────────────────────
+   Catapult RaceWatch (https://              Professionelles Produkt                  Verbindet Wetter, Timing, GPS,
+   www.catapult.com/solutions/racewatch)                                              Telemetrie, Race Control, Funk und
+                                                                                      Video mit Live-Modellierung für
+                                                                                      Reifenabbau und Strategie.
+  ────────────────────────────────────────  ───────────────────────────────────────  ────────────────────────────────────────
+   RaceDoc (https://racedoc.net/)            Professionelles Produkt, aktuell Beta    Integriert Wettervorhersage und Radar
+                                                                                      in eine Umgebung für Strategie-,
+                                                                                      Reifen-, Kraftstoff- und Datenanalyse.
+                                                                                      Details der Berechnungsmodelle sind
+                                                                                      nicht öffentlich.
+
+  ## Warum freie Projekte Wetter häufig vereinfachen
+
+  1. Beobachtung ist nicht gleich Vorhersage
+
+     FastF1 und OpenF1 liefern vor allem während der Session gemessene Wetterdaten. Eine Strategieentscheidung benötigt
+     dagegen die Prognose, die zu diesem Zeitpunkt tatsächlich bekannt war. Verwendet ein historischer Replay spätere
+     Messwerte, entsteht Future Leakage.
+
+  2. Historische Prognosen sind schwerer zu beschaffen
+
+     Für einen korrekten Backtest benötigen wir unveränderliche Forecast-Snapshots mit Abrufzeitpunkt und der Regel:
+
+     available_at <= decision_time
+
+     Viele Projekte besitzen nur das später eingetretene Wetter, nicht den damaligen Informationsstand.
+
+  3. Wetter ist kein einfacher Wahr/Falsch-Wert
+
+     Strategierelevant sind unter anderem Regenbeginn, Intensität, Streckentemperatur, Wind, Abtrocknung und der Übergang
+     zwischen Slicks, Intermediates und Wet-Reifen. Diese Faktoren beeinflussen sich gegenseitig.
+
+  4. Die Datenquellen sind nur eingeschränkt vergleichbar
+
+     Open-Meteo beschreibt die Lufttemperatur als temperature_2m. Bei den F1-Wetterdaten fehlen teilweise genaue Angaben zu
+     Messhöhe, Sensorposition und Kalibrierung. Ein konstanter Offset wäre deshalb methodisch nicht ausreichend begründet.
+
+  5. Nasse Rennen sind selten und sehr unterschiedlich
+
+     Dadurch stehen deutlich weniger geeignete Fälle für Training, Kalibrierung und Evaluation zur Verfügung. Selbst der
+     wissenschaftliche TUM-Simulator schließt nasse Rennen beim trainierten Strategieagenten aus.
+
+  6. Professionelle Daten sind nicht frei verfügbar
+
+     Teams und professionelle Anbieter besitzen lokale Sensoren, Radar, kommerzielle Vorhersagen und Telemetrie. Dass Wetter
+     im professionellen Motorsport wichtig ist, zeigt auch die Integration von Wetterinformationen in FIA-Prozesse durch die
+     Partnerschaft mit Tomorrow.io
+     (https://www.fia.com/news/fia-and-tomorrowio-announce-official-partnership-revolutionise-weather-safety-efficiency).
+
+  ## Abgrenzung unseres Projekts
+
+  Wir sollten nicht behaupten, als einziges Projekt Wetter zu berücksichtigen. Die belastbare Abgrenzung lautet:
+
+  > Unser Projekt behandelt Wetter nicht nur als Anzeige oder synthetischen Parameter, sondern als versionierte und          
+  > zeitabhängige Eingabe einer reproduzierbaren Datenpipeline. Historische Open-Meteo-Prognosen bleiben unverändert erhalten
+  > und werden getrennt von späteren OpenF1- beziehungsweise FastF1-Beobachtungen gespeichert. Im Replay dürfen nur          
+  > Informationen verwendet werden, die zum jeweiligen Entscheidungszeitpunkt bereits verfügbar waren.                       
+
+  Damit unterscheiden wir uns besonders durch:
+
+  - unveränderliche Forecast-Snapshots,
+  - getrennte Prognose- und Beobachtungsdaten,
+  - dokumentierte Zeit- und Datenherkunft,
+  - Schutz vor Future Leakage,
+  - empirische Analyse möglicher Temperaturabweichungen,
+  - keinen unbegründeten festen Temperatur-Offset,
+  - robuste Teilresultate, wenn eine Wetterquelle ausfällt.
+
+  Der eigentliche Mehrwert ist damit weniger ein vermeintlich überlegenes Strategiemodell als die nachvollziehbare,
+  reproduzierbare und zeitlich korrekte Wetterdatenbasis, auf der spätere Strategiemodelle aufbauen können.
