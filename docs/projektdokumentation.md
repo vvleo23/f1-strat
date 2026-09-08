@@ -1,6 +1,6 @@
-# Projektdokumentation - Doku
+# Projektdokumentation
 
-Diese Datei ist die Grundlage für die spätere schriftliche Abgabe. Der verbindliche technische Stand, das MVP-Ziel, das Datenmodell und alle Ausführungsbefehle stehen ausschließlich in der [`README.md`](../README.md).
+Diese Datei ist die Grundlage für die spätere schriftliche Abgabe und beschreibt die zentralen Daten-, Speicher- und Zeitkonventionen eigenständig. Der jeweils verbindliche Detailstatus, das MVP-Ziel und alle Ausführungsbefehle werden weiterhin ausschließlich in der [`README.md`](../README.md) gepflegt.
 
 ## 1. Ausgangslage und Ziel
 
@@ -8,13 +8,50 @@ Diese Datei ist die Grundlage für die spätere schriftliche Abgabe. Der verbind
 
 Ein historischer Replay ist ein nachgelagerter Ausführungsmodus dieser Pipeline. Obwohl alle Renndaten bereits lokal vorliegen können, gibt er sie nur bis zu einem simulierten Zeitpunkt frei. Spätere Qualifying-, Renn- und Strategieberechnungen müssen dadurch so arbeiten, als würden die Daten gerade eintreffen. Der erste MVP umfasst Pipeline und Dashboard V1; Qualifying Prediction, Race Prediction, Strategie- und Boxenstoppfenster-Empfehlungen folgen erst danach. Komplexe Optimierung und bezahlte Live-Ingestion bleiben ausgeschlossen.
 
+### 1.1 Einordnung in die Vorlesung
+
+Die vier Vorlesungsunterlagen verstehen Data Science Programming nicht primär als einmaliges Modelltraining, sondern als Verbindung von Programmierung, Datenmanagement, Auswertung und einem realen Entscheidungsprozess. Das Projekt folgt diesem Verständnis: Kernprodukt ist der wiederholbar ausführbare Weg von externen F1- und Wetterdaten zu validierten, versionierten und auswertbaren Datenbeständen. Replay, Dashboard und spätere Berechnungen sind nachgelagerte Verbraucher und nicht Eigentümer der Datenerfassung.
+
+| Kompetenz- oder Bewertungsschwerpunkt | Umsetzung im Projekt | Nachweis |
+|---|---|---|
+| Programmiergrundlagen praktisch einsetzen | Python-Module, Klassen, Funktionen, Bedingungen, Iteration, Datei-I/O, HTTP-Clients und DataFrames bilden eine ausführbare Anwendung statt eines einmaligen Notebooks. | Quellcode unter `src/f1_pipeline/` und reproduzierbare Befehle in der `README.md` |
+| Automatisierungspotenzial erkennen und Arbeitsschritte bewerten | Meeting-Auswahl, Session-Discovery, zweckabhängige Endpoint-Planung, Ingestion, Validierung, Transformation und Manifestbildung laufen als zusammenhängender Job. Seltene fachliche Freigaben, etwa ein mehrdeutiges Circuit-Mapping, bleiben bewusst manuell. | Weekend-Orchestrator, Job-Service und Pipeline-Manifeste |
+| Datenmanagement mit Analyse und Entscheidung verbinden | Bronze-Snapshots und Silver-Facts versorgen Saisonübersicht, Replay, Pace-Auswertung und spätere Calculation Snapshots über dieselben geprüften Eingänge. | manifestgebundene Read Models und Input-Hashes |
+| Verständlichkeit und strukturierte Datenflüsse | Zuständigkeiten von Quellen, Pipeline, Race State, Berechnung und Darstellung sind getrennt; Datenfluss und zeitliche Freigabe werden grafisch dokumentiert. | Sequenzdiagramm in Abschnitt 2.4 und Zeitachsen in Abschnitt 4 |
+| Reproduzierbarkeit und Korrektheit | Unveränderliche Snapshots, SHA-256-Hashes, Schema- und Schlüsselprüfungen, versionierte Manifeste sowie deterministische Berechnungs-IDs identifizieren die Eingaben eines Ergebnisses. | Manifeste unter `data/curated/manifests/` und Verifikationsartefakte |
+| Robustheit und Fehlertoleranz | Quellenfehler bleiben isoliert, Abrufe besitzen Timeouts und begrenzte Retries, Schreibvorgänge sind atomar, und fehlende Werte werden nicht erfunden. | Status `available`, `partial`, `stale` und `unavailable` sowie dokumentierter Fehlerkontext |
+| Erweiterbarkeit | Quellenadapter, kanonische Facts, Replay, Analysen und Dashboard sind getrennte Schichten. Neue Berechnungen verwenden den bestehenden temporalen und manifestgebundenen Vertrag. | Paketstruktur und gemeinsamer Fact-Cut |
+| Wissenschaftlich sauberes Vorgehen | Annahmen und Heuristiken werden gekennzeichnet, Quellen getrennt verglichen und komplexere Modelle erst nach einem zeitlich korrekten Baseline-Vergleich erwogen. | Pace-Cross-Check, Walk-forward-Auswertung und Abschnitt 6 |
+| Quellen und Lizenzen | Für jede externe Quelle existiert eine Quellenkarte; fremder Code wird nur bei geklärter Lizenz übernommen. | `docs/sources/` und Abschnitt 9 |
+
+Für die Abgabe bedeutet dies: Code, Dokumentation, Präsentation und Funktionsnachweis müssen gemeinsam ein nachvollziehbares System zeigen; eine Klausur ist nicht vorgesehen. Der schriftliche Zielumfang beträgt 12 bis 24 Seiten mit hoher Informationsdichte. Die Abschlusspräsentation ist auf 20 Minuten Darstellung und 10 Minuten Diskussion ausgelegt und soll Vorgehen und Ergebnisse in den Mittelpunkt stellen. Neben 36 Kontaktstunden sieht das Modul 89 Stunden Selbststudium vor, weshalb eigenständige Implementierung und Überprüfung ein wesentlicher Teil der Projektleistung sind. Diese Dokumentation konzentriert sich daher auf Implementierung, Datenfluss, Entscheidungen, Fehlerfälle und überprüfbare Ergebnisse. Eine ungefähre Priorisierung von 45 % Pipeline, 20 % Datenqualität und Robustheit, 20 % Architektur und Automatisierung sowie 15 % Analysen und Visualisierung ist eine Interpretation der mehrfach betonten Vorlesungsziele, keine offizielle Bewertungsgewichtung.
+
 ## 2. Vorgehen
 
-### 2.1 Quellen erkunden
+### 2.1 Konzept und Automatisierungspotenzial
+
+Vor der Implementierung wurden die Leitfragen aus der Vorlesung auf den F1-Anwendungsfall übertragen:
+
+| Leitfrage | Festlegung für das Projekt |
+|---|---|
+| Welche Informationen werden benötigt? | Meeting- und Sessionidentität, Fahrer und Teams, Runden, Positionen, Abstände, Reifenstints, Boxenstopps, Race Control, Ergebnisse, Meisterschaftsstände, Streckenbezug sowie Wetter-Forecasts und -Beobachtungen. |
+| In welcher Form liegen sie vor? | OpenF1, Wikidata und Open-Meteo liefern JSON über HTTP; FastF1 liefert Python-Objekte beziehungsweise DataFrames. Kuratierte Tabellen werden als Parquet und Metadaten als JSON gespeichert. |
+| Wie sieht das Datenmodell aus? | Saisonbezogene Dimensionen beschreiben Meeting, Circuit, Session, Fahrer und Team. Kanonische Facts referenzieren diese Identitäten und tragen Ereignis-, Verfügbarkeits- und Ingestionszeit sowie Quellen- und Hashnachweis. |
+| Gibt es einen zeitlichen Verlauf? | Sessions und Rennereignisse bilden Ereignisfolgen; Wetter-Forecasts besitzen zusätzlich Modelllauf, Veröffentlichungszeit und Vorhersageziel. Der Wissensstand verändert sich mit jeder Verfügbarkeit. |
+| Wie werden Daten abgerufen? | Ausschließlich über gekapselte Quellenadapter und zweckabhängige Jobprofile. Das Dashboard liest lokal und übermittelt nur Ladeabsichten an den getrennten Job-Service. |
+| Wie wird der Dienst geschont? | Feste Timeouts, begrenzte Retries mit Backoff, `Retry-After`, ein Mindestabstand für OpenF1-Aufrufe, lokale Cache-Wiederverwendung und bedarfsorientierte Endpoint-Auswahl begrenzen Last und Laufzeit. |
+| Welche Risiken bestehen? | Ausfälle, leere oder verspätete Antworten, Schemaänderungen, Duplikate, fehlende Runden, uneindeutige Identitäten, unterschiedliche Quellsemantik, Rate Limits und Zukunftswissen im Replay. |
+| Wie werden fehlerhafte oder fehlende Daten behandelt? | Pflichtfelder, Datentypen, Schlüssel, Wertebereiche und UTC-Zeiten werden geprüft. Fehlendes bleibt fehlend; unsichere Teilergebnisse erhalten einen expliziten Status und ersetzen keinen letzten gültigen Snapshot. |
+| Wie sieht die automatisierbare Lösung aus? | Auswahl → Discovery → Abruf → Bronze-Snapshot → Validierung → Silver-Transformation → Manifest → Read Model beziehungsweise Analyse. Jeder Schritt besitzt eine begrenzte Verantwortung. |
+| Wie werden Daten aktualisiert? | Wiederholte idempotente Jobs erzeugen neue unveränderliche Snapshots oder verwenden geprüfte vorhandene Daten. Manuelle Dashboard-Intents sind umgesetzt; persistierte zeitversetzte Retries und automatische Finalisierung bleiben geplant. |
+
+Die bewusst einfachen Machbarkeitsnachweise sind erstens Session- und Endpoint-Abdeckung samt Qualitätsstatus, zweitens Kalender, Ergebnisse, Siege, Podien und Meisterschaftsstände, drittens Pace nach Fahrer und Reifenstint mit getrenntem OpenF1-/FastF1-Vergleich, viertens der zeitlich begrenzte Renn-Replay mit Race Control und Wetter sowie fünftens der Vergleich eines damals verfügbaren Forecasts mit späteren Beobachtungen. Diese Auswertungen prüfen Datensammlung und Automatisierung; sie setzen kein komplexes ML-Modell voraus.
+
+### 2.2 Quellen erkunden
 
 Zu Beginn wurden FastF1 und OpenF1 anhand historischer Sessions praktisch geprüft. Dabei wurde der technische Weg von API beziehungsweise Python-Bibliothek über Pandas bis zu Parquet nachgewiesen. Anschließend wurden Verantwortung und Überschneidungen der Quellen getrennt festgelegt.
 
-### 2.2 Referenzfall festlegen
+### 2.3 Referenzfall festlegen
 
 Als reproduzierbarer Akzeptanzfall wurde das vollständige Wochenende des Hungarian Grand Prix 2026 gewählt:
 
@@ -29,7 +66,7 @@ Belgien 2026 (`session_key=11334`) bleibt ein Regressionstest für den Circle-of
 
 Das Ziel ist nicht auf ein festes Rennformat beschränkt. Nach Auswahl eines Meetings werden alle gemeldeten Sessions entdeckt. Die Pipeline kann anschließend alle Sessions oder eine geprüfte Teilmenge nach OpenF1-Key, kanonischem Sessiontyp oder der Schnittmenge beider Filter laden. Ein Replay lädt nur das Rennen. Eine spätere Qualifying-Berechnung lädt die davor abgeschlossenen Trainingssessions; eine Rennberechnung kann zusätzlich Qualifying und Sprint verwenden. Trainingsdaten werden daher zweckgebunden automatisch geladen, aber nicht für jede einfache Kalenderabfrage.
 
-### 2.3 Daten absichern
+### 2.4 Daten absichern
 
 Die Pipeline speichert quellnahe Daten als Parquet, validiert Pflichtfelder, Schlüssel und UTC-Zeitstempel und liest geschriebene Dateien zur Kontrolle erneut ein. Erfolgreiche Snapshots bleiben erhalten, wenn ein späterer Abruf fehlschlägt. Fehler werden je Quelle und Endpoint isoliert dokumentiert.
 
@@ -100,7 +137,91 @@ sequenceDiagram
 	Orchestrator-->>Aufruf: Aggregierter Run-Status
 ```
 
-### 2.4 Zeitlich begrenzten Replay aufbauen
+### 2.5 Datenverarbeitung nach dem EVA-Prinzip
+
+Das Vorlesungsprinzip Input → Processing → Output wird als mehrstufige Pipeline konkretisiert. Input sind unvertrauenswürdige externe JSON-Antworten, FastF1-Objekte und geprüfte Konfigurationen. Processing umfasst Datensichtung, Schema- und Inhaltsvalidierung, Normalisierung, Kombination und zeitliche Freigabe. Output sind unveränderliche Bronze-Snapshots, kanonische Silver-Facts, Manifeste, Read Models, Analysen und die read-only Darstellung.
+
+| Pipelinephase | Technische Umsetzung |
+|---|---|
+| Import | Gekapselte API-Clients prüfen HTTP-Status und JSON-Grundstruktur; FastF1 wird sessionzentriert mit lokalem Cache verwendet. |
+| Sichtung und Validierung | Pflichtspalten, Nicht-Null-Felder, numerische Werte, Session-Schlüssel, Geschäftsschlüssel, Duplikate und parsebare Zeitstempel werden kontrolliert. |
+| Bereinigung | Typen und Einheiten werden explizit normalisiert. Unbekannte Werte bleiben leer; es gibt keine pauschale Ersatzwertbildung und insbesondere keine Ersetzung durch `0`. |
+| Transformation und Kombination | Quellfelder werden auf kanonische Dimensionen und Facts abgebildet. Quellen werden über geprüfte Identitäten und zeitlich rückwärts gerichtete As-of-Zuordnungen verbunden, nicht blind zusammengefügt. |
+| Datenhaltung | Parquet speichert tabellarische Daten kompakt und typisiert; UTF-8-JSON hält Manifeste, Konfiguration und Rohbelege. Temporäre Parquet-Dateien werden vor dem atomaren Ersetzen erneut gelesen. |
+| Auswertung | Status- und Abdeckungsanalysen, Saisonübersicht, Pace-Vergleich, Replay und transparente statistische Baselines verwenden ausschließlich manifestgebundene Eingaben. |
+| Reporting | Dashboard und reproduzierbare Artefakte zeigen Ergebnisse und klar bezeichnete Leer-, Teil- oder Fehlerzustände. |
+
+#### Eingangsformen
+
+Die Pipeline arbeitet mit endlichen Snapshot-Antworten und nicht mit einer dauerhaft offenen Streaming-Verbindung. Zeitaufgelöste OpenF1-Daten werden endpointweise als vollständiger Block abgerufen und anschließend gespeichert. Der historische Replay liest diese Blöcke und gibt ihre Zeilen chronologisch frei; er simuliert damit einen Stream, ohne die Rohdaten umzuschreiben.
+
+| Eingang | Technische Form beim Abruf | Beispiele | Übernahme |
+|---|---|---|---|
+| OpenF1 | HTTP-Response mit einer JSON-Liste aus Objekten; jedes Objekt wird eine DataFrame-Zeile | `sessions`, `drivers`, `laps`, `position`, `location`, `pit`, `stints`, `race_control`, `weather`, Ergebnisse und Standings | Quellnahe tabellarische Bronze-Snapshots als Parquet; anschließend Transformation in kanonische Silver-Facts |
+| Wikidata | Verschachtelte JSON-Objekte aus Kandidatensuche und Entity-Abruf | Entity-ID, Labels, Beschreibungen, Land, `P625`-Koordinaten und Revision | Vollständige JSON-Antwort als Rohbeleg; nur eindeutig validierte Werte gelangen in Circuit-Dimension und Registry |
+| Open-Meteo | JSON-Objekt mit Request-Metadaten, Einheiten und parallelen stündlichen Arrays | Modelllauf, Grid-Koordinaten, Temperatur, Niederschlag, Wind und `time` | Vollständige JSON-Antwort als Bronze-Snapshot; je Zeitpunkt normalisierte Forecast-Zeile als Parquet |
+| FastF1 | Python-Objekte und Pandas-DataFrames der Bibliothek; HTTP-Details werden durch FastF1 gekapselt | Runden und optional beobachtetes Sessionwetter, ohne Telemetrie | Quellnahe Parquet-Dateien als unabhängiger Cross-Check; keine zeilenweise Vermischung mit OpenF1 |
+| Projektkonfiguration | Versionierte UTF-8-JSON-Dateien | geprüfte OpenF1-/Wikidata-Zuordnungen und Pit-Loss-Annahmen | Validierter Pipeline-Input; Inhalt beziehungsweise Hash wird dort, wo fachlich relevant, in die Run-Identität aufgenommen |
+
+#### Ablage und Speicherformate
+
+Parquet ist der maßgebliche tabellarische Projektspeicher. Es erhält Datentypen, Nullwerte und zeitzonenbewusste Zeitspalten und ist für die großen Positions- und Rundentabellen kompakter als Textformate. JSON wird für verschachtelte Rohantworten, Konfigurationen, Status, Lineage und Manifeste verwendet. Es existiert keine zusätzliche Projektdatenbank als zweite Wahrheitsquelle; eine SQLite-Datei im FastF1-Cache gehört ausschließlich der Bibliothek.
+
+| Speicherort | Inhalt und Format | Lebenszyklus |
+|---|---|---|
+| `config/` | manuell geprüfte oder editierbare UTF-8-JSON-Eingaben | versioniert; Änderungen erzeugen einen anderen Inhaltsnachweis |
+| `cache/` | technischer FastF1-HTTP-Cache | löschbar und nicht autoritativ; beschleunigt Wiederholungen |
+| `data/raw/` | quellnahe Bronze-Arbeitsdateien; Parquet für tabellarische OpenF1-/FastF1-Daten | wiederverwendbar, aber noch nicht als vereinheitlichtes Datenmodell zu lesen |
+| `data/raw/snapshots/` | unveränderliche Parquet-Snapshots für tabellarische Quellen sowie UTF-8-JSON für Wikidata und Open-Meteo | neue gültige Inhalte erzeugen neue Dateien; ältere Nachweise werden nicht überschrieben |
+| `data/curated/dimensions/season=<Jahr>/` | autoritative, typisierte Silver-Dimensionen als Parquet | saisonpartitioniert und atomar aktualisiert; unpartitionierte 2026-Dateien sind nur Übergangsaliase |
+| `data/curated/facts/<Fact-Typ>/` | kanonische, zeitlich gekennzeichnete Silver-Facts als Parquet | pro Quell-Snapshot beziehungsweise Session inhaltsbezogen gespeichert |
+| `data/curated/registries/` | automatisch eindeutig verifizierte Circuit-Zuordnungen als UTF-8-JSON | atomar und gegen parallele Schreibzugriffe gesperrt |
+| `data/curated/manifests/` | UTF-8-JSON mit Run-ID, Status, Pfaden, Zeilenzahlen, Schema-Versionen und SHA-256-Hashes | bestimmt, welche konkreten Dateien zusammen einen lesbaren Datenstand bilden |
+| `data/artifacts/` | Gold-Ausgaben wie Verifikationsberichte, Analyse-Parquet und Replay-HTML | aus manifestgebundenen Eingängen reproduzierbare Verbraucherartefakte |
+| `demo_data/` | kleiner, hashgeprüfter und versionierter Auszug für das Dashboard | Fallback, wenn keine lokale Ingestion vorhanden ist; kein Ersatz für vollständige Quelldaten |
+
+Tabellarische Dateien werden zunächst in eine temporäre Datei geschrieben, testweise wieder eingelesen und erst danach atomar an den Zielpfad verschoben. JSON wird ebenfalls über eine temporäre Datei atomar ersetzt. SHA-256-Hashes in den Manifesten erkennen nachträgliche Änderungen. Ein fehlgeschlagener oder unvollständiger Abruf ersetzt deshalb weder einen gültigen Snapshot noch einen gültigen manifestgebundenen Datenstand.
+
+Externe Antworten gelten grundsätzlich als nicht vertrauenswürdig. Deshalb werden JSON nicht als frei ausführbarer Inhalt behandelt, Payload-Typen und erwartete Felder geprüft und Dateien über Bibliotheken statt eigener String-Parser verarbeitet. Parquet wird über Pandas/PyArrow und JSON über den Standardparser gelesen; ein fehleranfälliges manuelles Zerlegen von CSV- oder JSON-Text findet nicht statt. CSV, XML und YAML gehören derzeit nicht zu den vereinbarten Pipelineformaten und benötigen daher keinen eigenen Parser. Für alle selbst geschriebenen Textdateien gilt UTF-8. Das Encoding externer HTTP-Antworten wird vom jeweiligen Client verarbeitet; unparsebare Antworten werden als Quellenfehler protokolliert und nicht wie gültige Daten persistiert.
+
+### 2.6 Zeitmodell und UTC-Konvention
+
+UTC ist die einzige kanonische Zeitbasis der Pipeline. Eingaben, Manifeste, Dateinamen, gespeicherte Zeitspalten, Replay-Frames und Berechnungsgrenzen werden in UTC normalisiert. An Schnittstellen wird ISO 8601 mit explizitem Offset verwendet, bevorzugt die Form `2026-07-26T13:05:27Z`; intern verwendet Pandas zeitzonenbewusste `Timestamp`-Werte. Die Hilfsfunktionen interpretieren derzeit aus Kompatibilitätsgründen einen Zeitwert ohne Zeitzone als UTC. Für neue Aufrufe und persistierte Daten ist ein explizites `Z` oder `+00:00` verpflichtende Projektkonvention, damit eine lokale Rechnerzeitzone keinen Lauf verändert.
+
+Reine Kalenderdaten werden als ISO-8601-Datum `YYYY-MM-DD` gespeichert, eine Saison als vierstellige Ganzzahl. Zeitdauern wie Runden-, Sektor- oder Boxengassenzeiten sind numerische Sekundenwerte und keine Uhrzeiten. JSON enthält Date-Time-Werte als ISO-8601-String mit Offset; Parquet speichert sie als typisierte UTC-Zeitspalten. Dateinamen verwenden entweder einen kompakten UTC-Zeitstempel `YYYYMMDDTHHMMSSffffffZ` oder einen aus dem Dateiinhalt berechneten Hash. Ungültige Werte werden beim Parsen nicht stillschweigend in eine lokale Zeit umgedeutet: Pflichtzeiten führen zu einem Validierungsfehler, optionale unbekannte Zeiten bleiben fehlend und sind für temporale Auswertungen nicht verfügbar.
+
+| Zeitfeld | Bedeutung |
+|---|---|
+| `event_time` | Zeitpunkt, zu dem ein Renn- oder Quelldatenereignis fachlich eintritt; abgeschlossene Runden und Stints werden erst an ihrem abgeleiteten Ende sichtbar. |
+| `run_initialized_at` | Initialisierungszeit eines Wettermodelllaufs; sie beweist noch keine öffentliche Verfügbarkeit. |
+| `available_at` | Frühester nachgewiesener oder konservativ abgeleiteter Zeitpunkt, ab dem ein Fact oder Forecast als Eingang verwendet werden darf. |
+| `retrieved_at` / `ingested_at` | Tatsächlicher Abruf beziehungsweise Aufnahmezeitpunkt durch die Pipeline; beide dokumentieren Verarbeitung und Herkunft, ersetzen aber nicht automatisch `event_time`. |
+| `valid_time` | Zeitpunkt, für den ein Forecast gilt. Er darf nach `decision_time` liegen, wenn der Forecast selbst rechtzeitig verfügbar war. |
+| `decision_time` | Reproduzierbare Wissensgrenze eines Replays oder einer Berechnung. Zulässig sind nur Facts mit `event_time <= decision_time` und `available_at <= decision_time`. |
+
+#### Gültigkeitsintervalle mit `valid_from` und `valid_to`
+
+Für die Feldnamen `valid_from` und `valid_to` existiert kein universeller Standard. ISO 8601 standardisiert die Darstellung von Zeitpunkten und Zeitintervallen, schreibt aber keine Datenbankspalten vor. In temporalen Datenmodellen ist das Paar dennoch eine verbreitete Konvention. Das Projekt definiert ein solches Intervall bei zukünftiger Verwendung grundsätzlich halboffen als `[valid_from_utc, valid_to_utc)`: Der Start gehört zum Intervall, das Ende nicht. Ein leeres `valid_to_utc` bedeutet, dass keine nachfolgende Version bekannt ist. Ein technisches Maximaldatum wie `9999-12-31` wird nicht als Ersatzwert erfunden.
+
+Diese Gültigkeit ist von den übrigen Zeitdimensionen zu unterscheiden:
+
+| Zeitangabe | Fachliche Aussage | Gültigkeitsintervall? |
+|---|---|---|
+| `planned_start_utc` / `planned_end_utc` | geplanter Zeitraum eines Meetings | nein; Terminplanung |
+| `scheduled_start_utc` / `scheduled_end_utc` | geplanter Zeitraum einer Session | nein; Terminplanung |
+| `event_time` | Zeitpunkt eines Rennereignisses oder einer Messung | nein; punktuelles Ereignis |
+| `available_at` | Zeitpunkt, ab dem die Pipeline den Fact verwenden darf | nein; Wissensgrenze |
+| `valid_time` | Zielzeitpunkt eines einzelnen Forecast-Werts | nein; punktuelle Vorhersage |
+| `retrieved_at` / `ingested_at` | Abruf und technische Aufnahme | nein; Herkunft und Verarbeitung |
+| `valid_from_utc` / `valid_to_utc` | fachliche oder festgelegte Gültigkeit einer bestimmten Objektversion | ja; halboffenes Intervall |
+
+Im implementierten Schema besitzt derzeit nur `circuit_geometry` die Felder `valid_from_utc` und `valid_to_utc`. Beim Erzeugen einer Geometrie wird `valid_from_utc` auf ihren Ingestionszeitpunkt gesetzt und `valid_to_utc` bleibt leer. Der untersuchte lokale Datenstand enthält zehn Geometrien, alle mit offenem Ende; eine neue Geometrie schließt ältere Versionen nicht. Die Auswahl verwendet `valid_from_utc` zur zeitlichen Ordnung, während die eindeutige `geometry_id` weiterhin Session und Quellversion identifiziert. Das ist eine offene Versionshistorie, aber noch keine vollständig gepflegte Slowly-Changing-Dimension vom Typ 2 und keine bitemporale Tabelle.
+
+Für kanonische Facts werden keine pauschalen `valid_from`-/`valid_to`-Felder ergänzt. Runden, Positionen, Race-Control-Meldungen und Wettermessungen sind Ereignisse oder Messpunkte und werden durch `event_time` und `available_at` präziser beschrieben. Forecast-Zeilen verwenden entsprechend `valid_time` und `available_at`. Vollständige Gültigkeitsintervalle werden erst dann eingesetzt, wenn eine fachliche Entität tatsächlich mehrere nicht überlappende Versionen benötigt. In diesem Fall müssen frühere Versionen geschlossen, Überschneidungen verhindert und die Regel `valid_from_utc < valid_to_utc` für geschlossene Intervalle validiert werden.
+
+Sommerzeit und lokale Rennortzeit beeinflussen Speicherung, Sortierung und temporale Schnitte nicht. Das Dashboard kennzeichnet seine derzeitige Zeitanzeige ausdrücklich als UTC. Falls später eine lokale Anzeige ergänzt wird, erfolgt die Umrechnung ausschließlich an der Präsentationsgrenze mit einer IANA-Zeitzone des Rennorts; der gespeicherte Wert bleibt UTC. Dadurch entstehen weder doppelte noch fehlende Stunden beim Wechsel zwischen Normal- und Sommerzeit, und Rennen aus verschiedenen Ländern bleiben direkt vergleichbar.
+
+### 2.7 Zeitlich begrenzten Replay aufbauen
 
 ```text
 vollständige historische Snapshots
@@ -118,11 +239,11 @@ nächsten Trigger verarbeiten
 
 Eine Neuberechnung kann durch Rennstart, Rundenabschluss, Race-Control-Status, Boxenstopp oder einen neu verfügbaren Wetter-Forecast ausgelöst werden. Jeder Lauf speichert Trigger, Entscheidungszeit, Input-Hash, Feature- und Berechnungsversion, Status und Ergebnis. Der Begriff „Berechnung“ ist absichtlich allgemein: Zunächst kann eine nachvollziehbare Regel oder statistische Baseline verwendet werden; ein ML-Modell ist keine Voraussetzung.
 
-### 2.5 Replay und Analyse verwenden
+### 2.8 Replay und Analyse verwenden
 
 Der Replay verarbeitet Positionen, Abstände, Runden, Reifen, Boxenstopps und Race-Control-Meldungen mit rückwärts gerichteten As-of-Zuordnungen und einer expliziten `decision_time`-Grenze. Der gemeinsame Fact-Cut verlangt sowohl `event_time <= decision_time` als auch `available_at <= decision_time`; unbekannte Zeitwerte bleiben unsichtbar. Die Referenzpace wird für jeden Frame nur aus abgeschlossenen Runden geschätzt, der GPS-Fortschritt verwendet ausschließlich die Distanz einer vorher abgeschlossenen Runde und vollständige Stints erscheinen erst zu ihrer abgeleiteten Verfügbarkeit. Prefix-Regressionstests ergänzen spätere Pace-, Location- und Stintdaten und prüfen, dass frühere Frames unverändert bleiben. Eine erste Pace-Analyse gruppiert OpenF1-Runden nach Stints und vergleicht die Fahreraggregate separat mit FastF1. Die Quelldaten werden nicht zusammengezählt.
 
-### 2.6 Zielbild und aktueller Umsetzungsstand
+### 2.9 Zielbild und aktueller Umsetzungsstand
 
 Das fachliche Zielbild besteht aus zwei Ansichten. Dashboard V1 besitzt eine Übersichtsseite für Saison, Rennwochenende und Session mit Kalender, Ergebnissen, Fahrer- und Teamwertungen, Siegen, Podien und wenigen einfachen Analysen. Die Re-live-Seite kombiniert rekonstruierte Fahrerreihenfolge, Wetter-Forecast und -Beobachtungen sowie Race-Control-Ereignisse. Für die Bewegung kann zwischen dem synthetischen Circle of Doom und einer aus Fahrzeugkoordinaten abgeleiteten lokalen Streckenlinie gewechselt werden. Die Auflösung sucht nacheinander Session, Meeting und Circuit innerhalb der Saison sowie für 2026 den Legacy-Pfad. Fehlt eine gültige Geometrie, bleibt der Circle die sichere Rückfallansicht. Qualifying-, Renn- und Strategieausgaben sind spätere Erweiterungen und werden in Dashboard V1 nicht angezeigt.
 
@@ -192,6 +313,12 @@ OpenF1 und FastF1 überschneiden sich bei Runden, Wetter und Sessiondaten, liefe
 
 Beim Großen Preis der Niederlande 2026 (`session_key=11353`) wurde das Rennen um 13:05:27 UTC abgebrochen und um 13:33:00 UTC fortgesetzt. Die OpenF1-Boxendaten erfassen für die Fahrer der geschlossenen Formation Boxengassendauern von etwa 1.572 bis 1.620 Sekunden und Zeitstempel zwischen 13:33:05 und 13:34:46 UTC. Dieser Zeitstempel markiert das Ende der gemessenen Boxengassendauer. Die frühere UI legte die Dauer irrtümlich hinter diesen Zeitpunkt und zeigte deshalb nach dem Restart fast alle Fahrer bis ungefähr 14:00 UTC als `PIT` an. Die Re-Live-Aufbereitung rekonstruiert das physische Intervall nun rückwärts als `exit_time - lane_duration` bis `exit_time`. Das gilt ebenso für reguläre Stopps, deren Anzeige zuvor um ihre Boxengassendauer nach hinten verschoben war. Diese retrospektive UI-Markierung ist kein zulässiges Point-in-Time-Eingangssignal für spätere Strategieentscheidungen; dafür wird ein separat nachgewiesener, rechtzeitig verfügbarer Boxeneinfahrtszeitpunkt benötigt.
 
+### Boxenstoppverlust unter Grün und VSC
+
+Eine Live-Prüfung der OpenF1-Daten zum Italien-GP 2026 (`session_key=11361`) bestätigt die im Rennen genannte Größenordnung von 15 Sekunden unter VSC. Antonelli und Verstappen stoppten während des VSC, Hamilton fuhr weiter. Aus den summierten Rundenzeiten 28 und 29 ergibt sich gegenüber Hamilton für Antonelli ein relativer Verlust von `15,115 s` und für Verstappen von `14,909 s`; der Mittelwert beträgt `15,012 s`. Damit ist die VSC-Aussage für dieses Rennen unmittelbar durch Rundenzeitdaten gestützt.
+
+Die genannten 25 Sekunden unter Grün sind dagegen nur eine plausible Referenz. Die in `config/pit_loss_seconds.json` hinterlegten `24,0484 s` für Monza stammen aus durchschnittlichen OpenF1-Boxengassendauern. OpenF1 definiert `lane_duration` als Zeit in der Boxengasse, nicht als strategischen Verlust gegenüber einem weiterfahrenden Fahrzeug. Die zwei regulären Grünphasenwerte des Rennens lagen bei `26,3 s` und `31,1 s` und bilden keine belastbare Stichprobe. Deshalb verwenden wir den Wert nur als transparente Anzeigeannahme; eine spätere Strategieberechnung muss den relativen Verlust aus einem zeitlich passenden Nichtstopper-Vergleich bestimmen. Die Monza-Prüfung erfolgte direkt gegen die aktuelle API und ist noch kein lokal persistierter Snapshot; der lokale Datenstand endet beim Niederlande-GP.
+
 ### Zukunftswissen im historischen Replay
 
 Ein historisches Rennen enthält im Nachhinein alle späteren Ereignisse. Werden diese unbemerkt in frühere Zustände übernommen, entsteht Data Leakage. Für jeden Lauf gilt deshalb eine explizite `decision_time`. Rennbeobachtungen werden erst ab ihrem Ereigniszeitpunkt freigegeben. Forecasts benötigen zusätzlich eine nachgewiesene `available_at`; ein altes `valid_time` oder eine frühe Modellinitialisierung beweist nicht, dass der Forecast bereits abrufbar war.
@@ -240,6 +367,28 @@ Der OpenF1-Endpoint `intervals` antwortete für die geprüften Practice- und Qua
 ### Uneinheitliche Windeinheiten und grobe Forecast-Auflösung im Re-Live
 
 Die Re-Live-Wetterleiste zeigte Windgeschwindigkeiten in zwei verschiedenen Einheiten nebeneinander: die OpenF1-Trackbeobachtung nativ in m/s, den Open-Meteo-Forecast nativ in km/h, weil die Pipeline der Single-Runs-API keinen `wind_speed_unit`-Parameter übergibt. Zusätzlich sprang die Forecast-Anzeige auf den nächsten vollen Open-Meteo-Stundenwert, sodass die Kacheln „Now“, „+10 min“ und „+30 min“ bei Ungarn denselben Wert und teils dieselbe Uhrzeit zeigten. Eine Prüfung der Single-Runs-API-Dokumentation ergab, dass echte 15-Minuten-Auflösung nur für die regionalen Modelle HRRR und ICON-D2/AROME existiert; für das projektweit fixierte `ecmwf_ifs` liefert Open-Meteo selbst nur intern interpolierte Stundenwerte, deren Zusammenspiel mit dem expliziten `run`-Parameter der Single-Runs-API nicht dokumentiert ist. Statt dieses ungeklärte Verhalten zu übernehmen, interpoliert die Anzeige jetzt selbst linear zwischen den zwei umgebenden echten Stundenwerten (Windrichtung zirkulär, um den Sprung bei Nord nicht linear falsch zu mitteln) und kennzeichnet interpolierte Kacheln explizit als „interpolated“. Windgeschwindigkeit wird für Beobachtung und Forecast einheitlich in m/s angezeigt. Dieselbe Interpolation liefert außerdem eine neue Wochenend-Wetterübersicht je Session im bestehenden Meeting-Dialog der Saisonübersicht.
+
+### Temperaturabweichung zwischen Forecast und Streckenmessung
+
+Im Re-Live fiel auf, dass die Open-Meteo-Prognose und die von OpenF1 gelieferte Lufttemperatur nicht immer übereinstimmen. Untersucht wurde deshalb, ob ein allgemeiner oder länderspezifischer Offset von etwa ein bis zwei Grad begründet werden kann. Verglichen wurden ausschließlich OpenF1 `air_temperature` und Open-Meteo `temperature_2m`; `track_temperature` misst die Fahrbahnoberfläche und ist fachlich keine Vergleichsgröße für eine Lufttemperaturprognose.
+
+Für jede Session wurde der neueste ECMWF-IFS-Modelllauf gewählt, dessen `available_at` spätestens am geplanten Sessionstart lag. Doppelte Dateien desselben Session-/Modelllaufpaars wurden entfernt. Da der Forecast stündlich und die Streckenmessung ungefähr minütlich vorliegt, wurde die Prognose wie in der Anzeige linear zwischen den benachbarten Stundenwerten auf den Beobachtungszeitpunkt interpoliert. Das Residuum ist als `OpenF1 air_temperature - Open-Meteo temperature_2m` definiert; ein positives Vorzeichen bedeutet damit, dass die Streckenmessung wärmer war. Die Auswertung aggregiert zuerst je Session, damit eine längere Session nicht allein wegen zusätzlicher Messzeilen stärker gewichtet wird.
+
+| Session | Land | Messpunkte | mittleres Residuum | MAE |
+|---|---|---:|---:|---:|
+| Japan 2026 Qualifying (`11249`) | Japan | 75 | +0,30 °C | 0,32 °C |
+| Großbritannien 2026 Race (`11326`) | Vereinigtes Königreich | 156 | −0,43 °C | 0,66 °C |
+| Belgien 2026 Race (`11334`) | Belgien | 146 | +0,10 °C | 0,64 °C |
+| Ungarn 2026 Race (`11342`) | Ungarn | 156 | −0,89 °C | 0,89 °C |
+| Niederlande 2026 Race (`11353`) | Niederlande | 191 | +1,23 °C | 1,33 °C |
+
+Der gleich gewichtete mittlere Session-Bias beträgt nur `+0,06 °C`, bei einer Standardabweichung von `0,80 °C` zwischen den Sessions und einer Spannweite von `−0,89 °C` bis `+1,23 °C`. Die Vorzeichen wechseln zwischen den Rennorten. In einem Leave-one-session-out-Test erhöhte eine aus den jeweils vier anderen Sessions geschätzte konstante Korrektur den mittleren absoluten Session-Bias von `0,59 °C` auf `0,72 °C`. Die vorhandenen Daten liefern damit weder Evidenz für einen globalen Offset von ein bis zwei Grad noch für eine Verbesserung durch einen aus dieser kleinen Stichprobe geschätzten konstanten Offset.
+
+Ein Ländereffekt ist mit diesem Bestand nicht identifizierbar. Für die operative Auswahl liegt nur eine Vergleichssession je Land vor; Land, Strecke, konkrete Wetterlage und einzelner Modellfehler sind deshalb vollständig miteinander vermischt. Selbst mehrere Rennen aus demselben Land wären bei unterschiedlichen Strecken kein sauberer Nachweis eines Landeseffekts. Eine spätere Kalibrierung sollte primär dieselbe Strecke über mehrere Sessions und Jahre betrachten und zusätzlich Forecast-Vorlaufzeit, Tageszeit, Wetterregime und Modellversion kontrollieren.
+
+Auch die Messdefinition ist nicht vollständig symmetrisch. Open-Meteo definiert `temperature_2m` als Lufttemperatur zwei Meter über Grund. Die verwendeten Modellgitterpunkte liegen in den fünf Fällen ungefähr `0,96` bis `6,36 km` vom gespeicherten Streckenreferenzpunkt entfernt; Modellauflösung, Geländehöhe und lokales Mikroklima können daher Abweichungen verursachen. OpenF1 dokumentiert für `air_temperature` Einheit und Bedeutung, aber keine Sensorhöhe oder genaue Position. Das FIA-Reglement bezeichnet die vom beauftragten Wetterdienst erfasste Umgebungstemperatur als maßgeblich, legt in der öffentlich geprüften Stelle jedoch ebenfalls keine Messhöhe offen. Die WMO nennt für standardisierte bodennahe Lufttemperatur typischerweise `1,25` bis `2 m`; daraus darf ohne Metadaten nicht abgeleitet werden, dass die F1-Messstation exakt diesem Aufbau folgt.
+
+Die Untersuchung ist ein explorativer Machbarkeitsnachweis und keine Forecast-Kalibrierung. Die Modellläufe wurden als feste historische Single Runs nachträglich abgerufen; ihr `available_at` beruht auf der dokumentierten konservativen Sechs-Stunden-Regel und nicht auf einem damals durch das Projekt beobachteten Abruf. Für eine produktive Korrektur wären mehrere tatsächlich point-in-time erfasste Forecast-Jahrgänge und ein Walk-forward-Test gegen die unkorrigierte Prognose erforderlich.
 
 ### Gleichzeitige Wochenend-Ladejobs
 
@@ -291,6 +440,8 @@ Die übrigen drei Befunde wurden behoben. `persistence.py` erhielt einen neuen w
 | September 2026 | Qualifying Prediction als transparente statistische Baseline umsetzen | Aktuelle Trainingssessions bestimmen die Pace; lokale Historie kalibriert Korrekturen und Unsicherheit, ohne sofort ein schwer erklärbares ML-Modell einzuführen |
 | September 2026 | Windgeschwindigkeit im Re-Live einheitlich in m/s anzeigen | OpenF1-Beobachtung und Open-Meteo-Forecast lieferten native, aber unterschiedliche Einheiten; ein direkter Vergleich erforderte eine gemeinsame Einheit |
 | September 2026 | Fehlende Sub-Stunden-Forecast-Auflösung durch eigene lineare Interpolation lösen statt Open-Meteo `minutely_15` | Native 15-Minuten-Daten existieren nur für regionale Modelle außerhalb des projektweit fixierten `ecmwf_ifs`; das Zusammenspiel von `minutely_15` mit dem expliziten `run`-Parameter der Single-Runs-API ist nicht dokumentiert und hätte die Reproduzierbarkeitsgarantie riskiert |
+| September 2026 | Temperatur-Forecasts nicht mit einem globalen oder länderspezifischen festen Offset korrigieren | Fünf operative Vergleichssessions zeigen wechselnde Vorzeichen und nahezu keinen Gesamtbias; die kleine Stichprobe trennt Land, Strecke und Wetterlage nicht, und eine Leave-one-session-out-Korrektur verschlechterte den Fehler |
+| September 2026 | `valid_from_utc`/`valid_to_utc` nur für echte Objektversionen und als halboffenes Intervall verwenden | Ereignisse, Verfügbarkeit, Forecast-Zielzeit und Terminplanung besitzen andere Semantik; pauschale Gültigkeitsfelder würden diese Zeitdimensionen vermischen |
 | September 2026 | Gemeldete Job-Nebenläufigkeitsprobleme vor einer Behebung deterministisch reproduzieren | Ein einzelner Live-Test bewies wegen Timing-Abhängigkeit weder Vorhandensein noch Abwesenheit der vermuteten Race Condition; ein erzwungener Thread-Test lieferte einen belastbaren Nachweis |
 | September 2026 | Geteiltes Rate-Limit und HTTP-401-Retry vorerst zurückstellen | Beide Befunde betreffen ausschließlich Skalierung unter höherer Last; für ein privates Uni-Tool mit einem Nutzer unverhältnismäßiger Aufwand gegenüber Nutzen |
 | September 2026 | Sperren um geteilte Season-Dateien nur an den Schreibstellen ergänzen, bestehende `geometry.py`-Sperrlogik nicht anfassen | Kleinstmöglicher, klar rückbaubarer Eingriff je Datei; das etablierte Muster wird wiederverwendet (`persistence.py::file_lock`), nicht dupliziert oder umgebaut |
@@ -389,14 +540,20 @@ Neue technische Fähigkeiten werden zuerst im Status und in der Roadmap der [`RE
 
 ## 9. Verwendete Grundlagen
 
+- Vier Vorlesungsunterlagen des Moduls Data Science Programming, insbesondere zu Kompetenzzielen, Projektbewertung, Python, EVA, Datenimport, Datenformaten, Encoding, Zeit und Fehlerfällen
+- ISO 8601 Date and time format: <https://www.iso.org/iso-8601-date-and-time-format.html>
+- Microsoft Temporal Tables als Beispiel für `ValidFrom`/`ValidTo`: <https://learn.microsoft.com/en-us/sql/relational-databases/tables/temporal-tables>
 - OpenF1 API: <https://openf1.org/docs/>
 - FastF1 Dokumentation: <https://docs.fastf1.dev/>
 - Open-Meteo Forecast API: <https://open-meteo.com/en/docs>
+- Open-Meteo ECMWF Forecast API: <https://open-meteo.com/en/docs/ecmwf-api>
 - Open-Meteo Single Runs API: <https://open-meteo.com/en/docs/single-runs-api>
 - Open-Meteo Historical Forecast API: <https://open-meteo.com/en/docs/historical-forecast-api>
 - Open-Meteo Previous Runs API: <https://open-meteo.com/en/docs/previous-runs-api>
 - Open-Meteo Preise und freie Nutzungsgrenze: <https://open-meteo.com/en/pricing>
 - Wikidata Data Access: <https://www.wikidata.org/wiki/Wikidata:Data_access>
+- FIA Formula 1 Regulations 2026, Section C: <https://www.fia.com/system/files/documents/fia_2026_f1_regulations_-_section_c_technical_-_iss_16_-_2026-02-27.pdf>
+- WMO guidance used for automatic weather-station sensor siting: <https://etrp.wmo.int/pluginfile.php/68375/mod_resource/content/1/AWS%20tender%20specification.pdf>
 - TUMFTM Race Simulation: <https://github.com/TUMFTM/race-simulation>
 - F1/AWS Qualifying Pace: <https://aws.amazon.com/blogs/machine-learning/predicting-qualification-ranking-based-on-practice-session-performance-for-formula-1-grand-prix/>
 - F1 Picks Predictor: <https://github.com/eddmann/f1-picks-2025-predictor>
