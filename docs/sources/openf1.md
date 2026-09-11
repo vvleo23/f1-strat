@@ -27,9 +27,12 @@ OpenF1 `circuit_key` is the stable join to a reviewed or uniquely auto-verified 
 ## Access
 
 - Base URL: `https://api.openf1.org/v1`
-- Historical HTTP GET requests without authentication for the current use case
+- Historical HTTP GET requests without authentication outside OpenF1's live window
+- OpenF1 classifies the interval from 30 minutes before a session until 30 minutes after it as live. During an observed live window on 11 September 2026, the service also rejected an unauthenticated request for historical session `11342` and stated that global API access, including past sessions, was restricted to authenticated users until the live session ended.
 - Bounded timeouts, retries with backoff, and at most 30 community requests per minute
 - Immutable content-addressed Raw Parquet snapshots plus compatible latest paths under `data/raw/`
+
+Historical jobs therefore avoid relying on anonymous access during live windows. If access is rejected, independent sources continue and an existing valid snapshot may be exposed as `stale`; without one, the OpenF1 result remains `unavailable`. The client does not poll until access returns. Authentication and live access are outside Pipeline and Dashboard V1.
 
 ## Verification
 
@@ -40,6 +43,7 @@ The result records endpoint status, row count, raw and Silver paths, hashes, ret
 ## Limits
 
 - Endpoint coverage and fields can vary by session.
+- Anonymous historical access can be temporarily unavailable during an F1 live window even when the requested session is in the past.
 - Free historical availability after a session is not a guaranteed publication schedule; jobs retry later without polling indefinitely.
 - A complete historical table on disk is not automatically valid prediction input. Replay consumers receive only records released up to `decision_time`.
 - `race_control.message` is semi-structured evidence, not an official steward-decision feed.

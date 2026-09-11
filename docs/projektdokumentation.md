@@ -291,6 +291,12 @@ FastF1 und OpenF1 sind keine offiziellen Datenprodukte der FIA oder Formula 1. E
 
 Beim Aktualitätstest am 21. Juli 2026 waren OpenF1-Daten für Belgien 2026 verfügbar, während FastF1 noch keine vollständigen Sessiondaten laden konnte. Daraus entstand die Entscheidung, OpenF1 für den zeitnahen Replay-Pfad zu priorisieren und FastF1 später als Cross-Check nachzuladen.
 
+### Temporär gesperrter historischer OpenF1-Zugriff
+
+OpenF1 stuft den Zeitraum von 30 Minuten vor einer Session bis 30 Minuten nach ihrem Ende als live ein. Während eines solchen Zeitfensters wurde am 11. September 2026 auch ein nicht authentifizierter Abruf der historischen Ungarn-Session `11342` abgewiesen. Die Fehlermeldung erklärte, dass der globale API-Zugriff einschließlich vergangener Sessions bis zum Ende der laufenden Session authentifizierten Nutzern vorbehalten sei. Die Einschränkung betrifft damit nicht nur angefragte Live-Daten, sondern kann vorübergehend auch historische Abrufe des kostenlosen Zugangs verhindern.
+
+Für die Pipeline ist dies ein erwartbarer externer Verfügbarkeitszustand und kein Anlass für unbegrenzte Wiederholungen. Ein vorhandener gültiger Snapshot bleibt als `stale` nutzbar; ohne vorhandenen Snapshot bleibt die Quelle `unavailable`. Andere Quellen und unabhängige Jobs laufen weiter. Historische OpenF1-Jobs sollten möglichst außerhalb der Live-Zeitfenster ausgeführt werden. Authentifizierter Live-Zugriff gehört nicht zu Pipeline und Dashboard V1. Grundlage sind die offiziellen [Zugangsregeln](https://openf1.org/) und die [Authentifizierungsdokumentation](https://openf1.org/auth.html).
+
 ### Fehlende Rundendatensätze beim Großen Preis von Ungarn 2026
 
 Betroffen ist ausschließlich der bisher untersuchte Renn-Datensatz des Großen Preises von Ungarn 2026 am Hungaroring, OpenF1 `session_key=11342`. Der gespeicherte `laps`-Snapshot enthält 1.423 Zeilen für 22 Fahrer. Innerhalb der jeweiligen Rundensequenzen fehlt Runde 40 für die Fahrer 12, 16, 44 und 81 sowie Runde 39 für die Fahrer 14, 18, 43, 55 und 87. Die geprüften Replay-Fälle Belgien 2026 (`session_key=11334`) und Zandvoort 2025 (`session_key=9920`) besitzen keine entsprechenden internen Lücken.

@@ -399,6 +399,8 @@ next chronological trigger
 
 Overlapping source rows are never blindly merged or counted twice. Each feature declares one primary source, while cross-check data remains separately identifiable.
 
+OpenF1 classifies the period from 30 minutes before a session until 30 minutes after it as live. On 11 September 2026, an anonymous request for the historical session `11342` was rejected during such a window because global API access, including past sessions, was temporarily limited to authenticated users. Historical jobs must therefore tolerate this access state: existing valid snapshots remain usable as `stale`, missing data remains `unavailable`, independent sources continue, and the client does not poll indefinitely. Authenticated live access is outside V1. See the [OpenF1 source card](docs/sources/openf1.md) for the source-specific details.
+
 ### Bronze boundary and source-to-feature traceability
 
 The provider API or library is outside the project data lake. **Bronze, or Stage 1, starts when the project persists the source-shaped response together with request, retrieval, identity, status, and hash evidence.** OpenF1 and FastF1 tabular responses are stored as raw Parquet, while Open-Meteo and Wikidata evidence is stored as immutable JSON. The FastF1 SQLite file is only an HTTP cache. Normalized facts, dimensions, and the locally derived circuit centerline are Silver rather than raw source data.
