@@ -7,6 +7,7 @@ import pandas as pd
 from f1_pipeline.dashboard.session_replay import _pit_records
 from f1_pipeline.dashboard.replay_service import (
     final_reconstructed_positions,
+    replay_decision_time,
     stint_history_payload,
 )
 from f1_pipeline.replay.circle_of_doom import CarState, ReplayFrame, ReplayResult
@@ -30,6 +31,23 @@ def car(driver_number: int, acronym: str, position: int, lap: int) -> CarState:
 
 
 class DashboardReplayServiceTest(unittest.TestCase):
+    def test_replay_uses_actual_lap_end_after_delayed_session_end(self) -> None:
+        laps = pd.DataFrame(
+            {
+                "available_at": [
+                    "2026-10-04T08:35:32.315Z",
+                    "2026-10-04T10:20:44.702Z",
+                ]
+            }
+        )
+
+        decision_time = replay_decision_time(
+            "2026-10-04T09:00:00Z",
+            laps,
+        )
+
+        self.assertEqual(decision_time, pd.Timestamp("2026-10-04T10:20:44.702Z"))
+
     def test_pit_records_reconstruct_lane_interval_before_exit_time(self) -> None:
         pits = pd.DataFrame(
             [

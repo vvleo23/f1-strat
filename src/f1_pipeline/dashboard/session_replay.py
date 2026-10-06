@@ -17,7 +17,7 @@ from f1_pipeline.dashboard.read_models import (
     source_meeting_key,
 )
 from f1_pipeline.dashboard.re_live_component import render_re_live
-from f1_pipeline.dashboard.replay_service import build_replay_view
+from f1_pipeline.dashboard.replay_service import build_replay_view, replay_decision_time
 from f1_pipeline.temporal import TemporalCutError, cut_facts
 
 REPLAY_CACHE_VERSION = 6
@@ -318,10 +318,12 @@ def render_session_replay(catalog: SeasonCatalog, session_key: int) -> None:
         if not country_rows.empty
         else ""
     )
-    decision_time = pd.to_datetime(
-        selected["scheduled_end_utc"], utc=True, errors="coerce"
-    )
-    if not isinstance(decision_time, pd.Timestamp) or pd.isna(decision_time):
+    try:
+        decision_time = replay_decision_time(
+            selected["scheduled_end_utc"],
+            session_silver(session_key, "laps"),
+        )
+    except ValueError:
         st.error("The session end time is unavailable.")
         return
     focus_driver = st.session_state.get("replay_focus_driver")

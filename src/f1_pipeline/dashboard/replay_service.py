@@ -43,6 +43,26 @@ class ReplayView:
     manifest_path: Path
 
 
+def replay_decision_time(
+    scheduled_end: Any,
+    laps: pd.DataFrame,
+) -> pd.Timestamp:
+    end = pd.to_datetime(scheduled_end, utc=True, errors="coerce")
+    if not isinstance(end, pd.Timestamp) or pd.isna(end):
+        raise ValueError("The session end time is unavailable.")
+    if laps.empty:
+        return end
+    for column in ("available_at", "event_time"):
+        if column not in laps.columns:
+            continue
+        actual_end = pd.to_datetime(
+            laps[column], utc=True, errors="coerce"
+        ).dropna().max()
+        if isinstance(actual_end, pd.Timestamp) and pd.notna(actual_end):
+            return max(end, actual_end)
+    return end
+
+
 def replay_bundle(session_key: int) -> SessionBundle:
     bundle = load_session_bundle(
         session_key,

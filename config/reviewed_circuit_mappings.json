@@ -11,6 +11,14 @@
     },
     {
       "source_system": "openf1",
+      "source_circuit_key": 12,
+      "wikidata_entity_id": "Q172738",
+      "expected_label": "Sepang International Circuit",
+      "expected_country": "Malaysia",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
       "source_circuit_key": 55,
       "wikidata_entity_id": "Q173083",
       "expected_label": "Circuit Zandvoort",

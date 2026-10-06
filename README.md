@@ -112,6 +112,8 @@ Last updated: **6 October 2026**
 - weekend-level forecast summary, interpolated per session start, in the season-overview meeting dialog
 - locking around the shared season-wide master dimensions and the shared circuit dimension so concurrent weekend jobs for different meetings can no longer silently discard each other's writes; the `starting_grid` OpenF1 endpoint's permanent HTTP 404 is now treated as a legitimate empty response instead of an ingestion failure
 - past, non-cancelled sessions remain downloadable when a stale local master snapshot still labels them `scheduled`; the dashboard uses the scheduled end time as the safe availability boundary and lets the ensuing pipeline job refresh master data
+- completed historical replays use the later of the scheduled end and the latest locally available lap, so a delayed start cannot truncate the race; the relocated Bahrain 2026 race now reaches lap 55 instead of stopping near lap 12
+- OpenF1 circuit key `12` is reviewed as Sepang International Circuit (`Q172738`) despite the relocated event retaining Bahrain country metadata; this explicit exception supplies verified Malaysian coordinates and restores the point-in-time Open-Meteo forecast
 
 ### Partly implemented
 

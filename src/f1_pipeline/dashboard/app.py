@@ -33,7 +33,10 @@ from f1_pipeline.dashboard.read_models import (
     source_meeting_key,
     source_session_key,
 )
-from f1_pipeline.dashboard.replay_service import REPLAY_REQUIRED_ENDPOINTS
+from f1_pipeline.dashboard.replay_service import (
+    REPLAY_REQUIRED_ENDPOINTS,
+    replay_decision_time,
+)
 from f1_pipeline.dashboard.session_replay import render_session_replay
 from f1_pipeline.geometry import TrackGeometryError, load_track_geometry
 
@@ -417,6 +420,11 @@ def _decision_time(session: pd.Series) -> str:
     value = pd.to_datetime(session["scheduled_end_utc"], utc=True, errors="coerce")
     if not isinstance(value, pd.Timestamp) or pd.isna(value):
         value = pd.Timestamp.now(tz="UTC")
+    try:
+        session_key = source_session_key(session["session_id"])
+        value = replay_decision_time(value, session_frame_for(session_key, "laps"))
+    except (KeyError, TypeError, ValueError):
+        pass
     return value.isoformat()
 
 
