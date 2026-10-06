@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Callable
 
 import pandas as pd
@@ -11,6 +12,16 @@ from f1_pipeline.dashboard.read_models import QualifyingPrediction, SeasonCatalo
 def _probability(value: object) -> str:
     number = pd.to_numeric(value, errors="coerce")
     return "Unavailable" if pd.isna(number) else f"{float(number):.1%}"
+
+
+def _lap_time(value: object) -> str:
+    number = pd.to_numeric(value, errors="coerce")
+    if pd.isna(number) or not math.isfinite(float(number)) or float(number) < 0:
+        return "Unavailable"
+    total_milliseconds = round(float(number) * 1_000)
+    minutes, remaining_milliseconds = divmod(total_milliseconds, 60_000)
+    seconds, milliseconds = divmod(remaining_milliseconds, 1_000)
+    return f"{minutes}:{seconds:02d}.{milliseconds:03d}"
 
 
 def render_qualifying_prediction(
@@ -93,6 +104,7 @@ def render_qualifying_prediction(
             "row_status": "Status",
         }
     )
+    display["Projected lap"] = display["Projected lap"].map(_lap_time)
     with st.container(border=True):
         st.subheader("Predicted classification")
         st.dataframe(
@@ -101,7 +113,7 @@ def render_qualifying_prediction(
             column_config={
                 "Position": st.column_config.NumberColumn(format="%d", pinned=True),
                 "Driver": st.column_config.TextColumn(pinned=True),
-                "Projected lap": st.column_config.NumberColumn(format="%.3f s"),
+                "Projected lap": st.column_config.TextColumn(),
                 "Projected gap": st.column_config.NumberColumn(format="+%.3f s"),
                 "Top 15": st.column_config.NumberColumn(format="percent"),
                 "Top 10": st.column_config.NumberColumn(format="percent"),
