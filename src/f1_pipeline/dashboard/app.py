@@ -44,6 +44,8 @@ JOB_SERVICE_COMMAND = (
     else "PYTHONPATH=src python -m f1_pipeline.job_service"
 )
 JOB_SERVICE_COMMAND_LANGUAGE = "powershell" if os.name == "nt" else "bash"
+ACTIVE_JOB_STATES = frozenset({"queued", "running"})
+MAX_AUTOMATIC_JOB_POLLS = 450
 
 
 @st.cache_data(show_spinner=False)
@@ -265,6 +267,19 @@ def _inject_styles() -> None:
     )
 
 
+def _job_copy(payload: dict[str, Any]) -> tuple[str, str]:
+    purpose = str(payload.get("purpose", "")).casefold()
+    if purpose == "weekend_complete_v1":
+        return "Downloading weekend data", "Weekend data"
+    if purpose == "replay":
+        return "Downloading Re-Live data", "Re-Live data"
+    if purpose == "qualifying_prediction":
+        return "Calculating qualifying prediction", "Qualifying prediction"
+    if purpose == "race_strategy":
+        return "Calculating race strategy", "Race strategy"
+    return "Downloading session data", "Session data"
+
+
 def _submit(payload: dict[str, Any], session_key: int) -> dict[str, Any] | None:
     try:
         result = submit_job(JOB_SERVICE_URL, payload)
@@ -273,29 +288,116 @@ def _submit(payload: dict[str, Any], session_key: int) -> dict[str, Any] | None:
         st.code(JOB_SERVICE_COMMAND, language=JOB_SERVICE_COMMAND_LANGUAGE)
         return None
     jobs = st.session_state.setdefault("session_job_ids", {})
-    jobs[str(session_key)] = result["job_id"]
-    st.success(f"Data job {result['job_id']} was submitted.")
+    job_key = str(session_key)
+    jobs[job_key] = result["job_id"]
+    running_label, subject = _job_copy(payload)
+    st.session_state.setdefault("session_job_copy", {})[job_key] = {
+        "running_label": running_label,
+        "subject": subject,
+    }
+    st.session_state.setdefault("session_job_poll_counts", {})[job_key] = 0
+    st.session_state.setdefault("session_job_monitoring", {})[job_key] = True
+    st.session_state.setdefault("session_job_results", {}).pop(job_key, None)
+    st.toast(f"{subject} job submitted.", icon=":material/schedule:")
     return result
 
 
-def _job_status(session_key: int) -> None:
-    identifier = st.session_state.get("session_job_ids", {}).get(str(session_key))
-    if not identifier:
-        return
+def _render_job_result(subject: str, status: dict[str, Any]) -> None:
+    state = str(status.get("status", "unknown"))
+    if state == "available":
+        st.status(f"{subject} is ready.", state="complete", expanded=False)
+    elif state == "stale":
+        with st.status(
+            f"{subject} is ready from cached source data.",
+            state="complete",
+            expanded=False,
+        ):
+            st.write("No newer valid source snapshot replaced the local data.")
+    elif state == "partial":
+        with st.status(
+            f"{subject} is ready with partial source availability.",
+            state="complete",
+            expanded=True,
+        ):
+            st.warning(
+                "Some independent source data is unavailable. "
+                "Available data was preserved."
+            )
+    elif state == "unavailable":
+        with st.status(f"{subject} failed.", state="error", expanded=True):
+            st.error(str(status.get("error", "Source data is unavailable.")))
+    else:
+        st.info(f"Job status: {state}")
+
+
+@st.fragment(run_every=2)
+def _active_job_status(session_key: int, identifier: str) -> None:
+    job_key = str(session_key)
+    copy = st.session_state.get("session_job_copy", {}).get(job_key, {})
+    running_label = str(copy.get("running_label", "Downloading data"))
+    subject = str(copy.get("subject", "Data"))
+    polls = st.session_state.setdefault("session_job_poll_counts", {})
+    polls[job_key] = int(polls.get(job_key, 0)) + 1
+    if polls[job_key] >= MAX_AUTOMATIC_JOB_POLLS:
+        st.session_state.setdefault("session_job_monitoring", {})[job_key] = False
+        st.rerun()
     try:
         status = get_job(JOB_SERVICE_URL, identifier)
     except JobServiceError as exc:
-        st.warning(str(exc))
+        with st.status(
+            f"{running_label}: status temporarily unavailable",
+            state="running",
+            expanded=True,
+        ):
+            st.warning(str(exc))
+            st.write("The next automatic status check will retry.")
         return
     state = str(status.get("status", "unknown"))
-    if state in {"available", "stale"}:
-        st.success(f"Data status: {state}")
-    elif state == "partial":
-        st.warning("Data loaded with partial source availability.")
-    elif state == "unavailable":
-        st.error(f"Data load failed: {status.get('error', 'source data unavailable')}")
-    else:
-        st.info(f"Data status: {state}")
+    if state not in ACTIVE_JOB_STATES:
+        st.session_state.setdefault("session_job_results", {})[job_key] = status
+        st.session_state.get("session_job_ids", {}).pop(job_key, None)
+        st.session_state.get("session_job_monitoring", {}).pop(job_key, None)
+        st.session_state.get("session_job_poll_counts", {}).pop(job_key, None)
+        st.cache_data.clear()
+        st.rerun()
+    with st.status(f"{running_label}…", state="running", expanded=True):
+        st.write(
+            "Queued by the job service."
+            if state == "queued"
+            else "The job is running."
+        )
+        st.write("Status updates automatically every 2 seconds.")
+
+
+def _job_status(session_key: int) -> None:
+    job_key = str(session_key)
+    identifier = st.session_state.get("session_job_ids", {}).get(job_key)
+    monitoring = st.session_state.get("session_job_monitoring", {}).get(job_key, True)
+    if identifier and monitoring:
+        _active_job_status(session_key, str(identifier))
+        return
+    copy = st.session_state.get("session_job_copy", {}).get(job_key, {})
+    subject = str(copy.get("subject", "Data"))
+    if identifier:
+        st.warning(
+            "Automatic status checks stopped after 15 minutes. The background job may still be running."
+        )
+        if st.button(
+            "Resume automatic status checks",
+            icon=":material/refresh:",
+            key=f"resume_job_status_{session_key}",
+        ):
+            st.session_state.setdefault("session_job_poll_counts", {})[job_key] = 0
+            st.session_state.setdefault("session_job_monitoring", {})[job_key] = True
+            st.rerun()
+        return
+    result = st.session_state.get("session_job_results", {}).get(job_key)
+    if isinstance(result, dict):
+        _render_job_result(subject, result)
+
+
+def _job_active(session_key: int) -> bool:
+    return str(session_key) in st.session_state.get("session_job_ids", {})
 
 
 def _session_label(session: pd.Series) -> str:
@@ -907,11 +1009,16 @@ def _meeting_dialog(
                     unsafe_allow_html=True,
                 )
 
+        st.caption(
+            "Download buttons submit a background job. Local status buttons only reread saved data."
+        )
+        job_active = _job_active(target_key)
         actions = st.columns([1.6, 1, 1])
         if actions[0].button(
-            "Load all weekend data",
+            "Download weekend data",
             type="primary",
-            disabled=not load_available,
+            icon=":material/download:",
+            disabled=not load_available or job_active,
             width="stretch",
             help=(
                 None
@@ -922,14 +1029,17 @@ def _meeting_dialog(
         ):
             _submit(_weekend_job_payload(season, meeting, sessions), target_key)
         if actions[1].button(
-            "Refresh status",
+            "Refresh local status",
+            icon=":material/refresh:",
             width="stretch",
+            help="Reread local manifests. This does not download data.",
             key=f"refresh_weekend_{meeting_key}",
         ):
             st.cache_data.clear()
             st.rerun()
         if actions[2].button(
             "Close",
+            icon=":material/close:",
             width="stretch",
             key=f"close_weekend_{meeting_key}",
         ):
@@ -1020,18 +1130,28 @@ def _session_dialog(
             else None
         )
         if not driver_options:
-            st.caption("Load session data before selecting a Re-Live driver.")
+            st.caption("Download session data before selecting a Re-Live driver.")
+        st.caption(
+            "Download and calculate buttons submit a background job. Open buttons use local data immediately."
+        )
+        job_active = _job_active(session_key)
         columns = st.columns(3 if feature_label else 2)
         load_clicked = columns[0].button(
-            "Load data",
-            disabled=not available,
+            "Reload session data…" if state.loaded else "Download session data",
+            icon=":material/download:",
+            disabled=not available or job_active,
             width="stretch",
             key=f"load_data_{session_key}",
         )
-        replay_label = "Re-Live" if replay_ready else "Prepare Re-Live"
+        replay_label = "Open Re-Live" if replay_ready else "Download Re-Live data"
         if columns[1].button(
             replay_label,
-            disabled=not available or (replay_ready and focus_driver is None),
+            icon=":material/play_arrow:" if replay_ready else ":material/download:",
+            disabled=(
+                not available
+                or job_active
+                or (replay_ready and focus_driver is None)
+            ),
             width="stretch",
             key=f"re_live_{session_key}",
         ):
@@ -1045,12 +1165,20 @@ def _session_dialog(
         if feature_label == "Quali Prediction":
             prediction = load_qualifying_prediction(session_key)
             prediction_label = (
-                "Open Quali Prediction" if prediction is not None else feature_label
+                "Open qualifying prediction"
+                if prediction is not None
+                else "Calculate qualifying prediction"
             )
             if columns[2].button(
                 prediction_label,
+                icon=(
+                    ":material/open_in_new:"
+                    if prediction is not None
+                    else ":material/calculate:"
+                ),
                 disabled=(
-                    not isinstance(scheduled_start, pd.Timestamp)
+                    job_active
+                    or not isinstance(scheduled_start, pd.Timestamp)
                     or pd.isna(scheduled_start)
                 ),
                 width="stretch",
@@ -1071,15 +1199,22 @@ def _session_dialog(
                 st.warning(f"Strategy data is incomplete: {exc}")
                 strategy = None
             strategy_label = (
-                "Open Strategy Re-Live"
+                "Open strategy Re-Live"
                 if strategy is not None and replay_ready
-                else "Prepare Re-Live"
+                else "Download Re-Live data"
                 if strategy is not None
-                else feature_label
+                else "Calculate race strategy"
             )
             if columns[2].button(
                 strategy_label,
-                disabled=focus_driver is None,
+                icon=(
+                    ":material/play_arrow:"
+                    if strategy is not None and replay_ready
+                    else ":material/download:"
+                    if strategy is not None
+                    else ":material/calculate:"
+                ),
+                disabled=focus_driver is None or job_active,
                 width="stretch",
                 key=f"race_strategy_{session_key}",
             ):
@@ -1108,8 +1243,9 @@ def _session_dialog(
             st.warning("Local data already exists. Reload it from the sources?")
             confirm, cancel = st.columns(2)
             if confirm.button(
-                "Reload data",
+                "Download fresh session data",
                 type="primary",
+                icon=":material/download:",
                 width="stretch",
                 key=f"confirm_reload_button_{session_key}",
             ):
@@ -1120,6 +1256,7 @@ def _session_dialog(
                 )
             if cancel.button(
                 "Cancel",
+                icon=":material/close:",
                 width="stretch",
                 key=f"cancel_reload_button_{session_key}",
             ):
@@ -1127,12 +1264,18 @@ def _session_dialog(
                 st.rerun()
         _job_status(session_key)
         if not replay_ready and st.button(
-            "Refresh Re-Live status",
+            "Refresh local Re-Live status",
+            icon=":material/refresh:",
+            help="Reread local manifests. This does not download data.",
             key=f"refresh_re_live_{session_key}",
         ):
             st.cache_data.clear()
             st.rerun()
-        if st.button("Close", key=f"close_dialog_{session_key}"):
+        if st.button(
+            "Close",
+            icon=":material/close:",
+            key=f"close_dialog_{session_key}",
+        ):
             st.session_state.pop("active_session_dialog", None)
             st.rerun()
 
@@ -1858,7 +2001,12 @@ def _dashboard(seasons: tuple[int, ...]) -> None:
         [1, 1.2, 7.8], gap="small", vertical_alignment="bottom"
     )
     season = int(season_column.selectbox("Season", seasons))
-    if refresh_column.button("Refresh status", width="stretch"):
+    if refresh_column.button(
+        "Refresh local status",
+        icon=":material/refresh:",
+        width="stretch",
+        help="Reread local manifests. This does not download data.",
+    ):
         st.cache_data.clear()
         st.rerun()
     try:

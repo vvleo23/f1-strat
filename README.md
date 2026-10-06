@@ -436,6 +436,8 @@ Dashboard V1 uses Streamlit, Plotly for overview charts, and an isolated Streaml
 
 The Analysis Dashboard is the single entry point. It shows every race weekend in the selected season as a calendar card with its discovered practice, sprint, qualifying, and race sessions. Manifest-backed states distinguish locally loaded, not-yet-loaded, and not-yet-available sessions. Selecting a Grand Prix opens a local weekend overview with the data-derived season round, compact session/coordinate/weather states, a stored-track preview when present, qualifying and race result tables when available, and a complete-weekend load intent. Qualifying gaps use the last session segment reached by each driver; race gaps preserve seconds, lap deficits, DNF, DNS, and DSQ from the normalized result. Classified race positions also show the change from the qualifying result with green gain, red loss, and grey unchanged indicators; unclassified results remain `NC`. Session dialogs submit lightweight loads, confirm explicit reloads, prepare missing replay data, and require a focus driver before opening Re-Live. Qualifying and Sprint Qualifying dialogs can submit a separate prediction job and open its manifest-backed classification with focus-driver Top-15/Top-10/Top-5 probabilities. Race dialogs can create a per-driver strategy calculation and open it in Re-Live. Within Re-Live, the project name returns to the dashboard. Driver and constructor standings are displayed side by side below the calendar; the driver table includes numbers, wins, and podiums. Standings progression, teammate comparison, grid-to-finish extremes, and fastest valid stationary stops use only locally loaded facts and expose their race and row coverage. Re-Live fits a 1920×1080 desktop without page scrolling and synchronizes the current order, Circle-of-Doom or stored-track cars, weather observations, session-relevant forecast slots, pit state, Race Control, and the latest released strategy snapshot with one replay clock. The strategy panel shows the action, next compound, planned stints, projected pit-exit position and neighbours, reason, and the actual team choice only after it becomes known. Position changes move the affected driver rows into their new order and show a temporary green upward or red downward triangle for gains and losses. Pit-lane state uses the physical interval ending at the OpenF1 pit timestamp, including red-flag stops, instead of incorrectly starting the duration at that exit timestamp. Its position list shows each driver's already-started tyre stints from oldest to newest as compound-coloured icons; hover text reports compound, stint number, lap range, stint length, and active state without displaying future stints early. Significant Race Control events also appear as a temporary bottom notification.
 
+Download and calculation actions use explicit labels, show a persistent running state, poll the local job service every two seconds, refresh the read models on completion, and display the final `available`, `stale`, `partial`, or failed state. Additional data actions for the same session remain disabled while its job is active. Automatic checks stop after 15 minutes and can be resumed manually. Open controls only read local artifacts; Refresh local status only clears dashboard read caches.
+
 ### Dashboard V1 and post-V1 extensions
 
 | Product area | Available in V1 | Post-V1 extensions or operational gaps |
@@ -448,7 +450,7 @@ The Analysis Dashboard is the single entry point. It shows every race weekend in
 | Session Re-Live | Focus-driver selection before entry; synchronized Circle-of-Doom/stored centerline, order, tyre-stint history, pit state, weather, forecast, Race Control, strategy and playback controls | Persisted race-state service |
 | Strategy recommendation | Versioned rule baseline using pit, stint, lap, interval, position, weather, Race Control and full-field state; immutable per-trigger snapshots and actual-stop comparison | Wider walk-forward validation, uncertainty, tyre-set inventory and stronger competitor reactions |
 
-The session-dialog Load Data, Re-Live, and Quali Prediction controls hand deterministic job intents to a separate local HTTP service. Re-loading existing local data requires confirmation and sets `refresh=true`. The dashboard process itself remains read-only: it does not call providers, write snapshots, or execute the pipeline, and it only observes job status, curated data, manifests, and artifacts. The service persists job state but is not a delayed scheduler or distributed queue.
+The session-dialog download and calculation controls hand deterministic job intents to a separate local HTTP service. Re-loading existing local data requires confirmation and sets `refresh=true`. The dashboard process itself remains read-only: it does not call providers, write snapshots, or execute the pipeline, and it only observes job status, curated data, manifests, and artifacts. The service persists job state but is not a delayed scheduler or distributed queue.
 
 ### Dashboard job-control flow
 
@@ -485,11 +487,12 @@ sequenceDiagram
         Runner->>Runner: Release lock
     end
 
-    User->>UI: Refresh job status
-    UI->>Client: Request job status
-    Client->>Service: GET /jobs/{job_id}
-    Service->>Status: Read job status manifest
-    Status-->>UI: running, available, stale, partial, or unavailable
+    loop Every two seconds while the dialog is open
+        UI->>Client: Request job status
+        Client->>Service: GET /jobs/{job_id}
+        Service->>Status: Read job status manifest
+        Status-->>UI: running, available, stale, partial, or unavailable
+    end
     UI->>Data: Read newly persisted data through read models
 ```
 
