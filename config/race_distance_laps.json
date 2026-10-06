@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "season": 2026,
+  "basis": "Published scheduled race distance used as static pre-race metadata.",
+  "circuits": [
+    {"key": "bahrain", "laps": 57},
+    {"key": "saudi_arabia", "laps": 50},
+    {"key": "australia", "laps": 58},
+    {"key": "emilia_romagna", "laps": 63},
+    {"key": "miami", "laps": 57},
+    {"key": "spain", "laps": 66},
+    {"key": "monaco", "laps": 78},
+    {"key": "azerbaijan", "laps": 51},
+    {"key": "canada", "laps": 70},
+    {"key": "great_britain", "laps": 52},
+    {"key": "austria", "laps": 71},
+    {"key": "france", "laps": 53},
+    {"key": "hungary", "laps": 70},
+    {"key": "belgium", "laps": 44},
+    {"key": "netherlands", "laps": 72},
+    {"key": "italy", "laps": 53},
+    {"key": "singapore", "laps": 62},
+    {"key": "japan", "laps": 53},
+    {"key": "united_states", "laps": 56},
+    {"key": "mexico", "laps": 71},
+    {"key": "brazil", "laps": 71},
+    {"key": "abu_dhabi", "laps": 58}
+  ]
+}

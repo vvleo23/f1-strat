@@ -994,6 +994,8 @@ def build_replay(
         frame_seconds: int,
         max_staleness_seconds: int,
         decision_time: str | pd.Timestamp | None = None,
+        vsc_pit_loss: float | None = None,
+        sc_pit_loss: float | None = None,
 ) -> ReplayResult:
     """Reconstruct all race replay frames without future measurements."""
     if frame_seconds <= 0:
@@ -1002,7 +1004,7 @@ def build_replay(
         raise ValueError("max_staleness_seconds must be greater than zero.")
     if any(
         value is not None and value < 0
-        for value in (green_pit_loss, neutralized_pit_loss)
+        for value in (green_pit_loss, neutralized_pit_loss, vsc_pit_loss, sc_pit_loss)
     ):
         raise ValueError("Pit-loss values must not be negative.")
 
@@ -1141,7 +1143,10 @@ def build_replay(
         # derselbe Array-Index muss in jedem Frame denselben Fahrer bezeichnen.
         cars.sort(key=lambda car: car.driver_number)
         pit_loss = (
-            neutralized_pit_loss if status in {"SC", "VSC"} else green_pit_loss
+            sc_pit_loss if status == "SC" and sc_pit_loss is not None
+            else vsc_pit_loss if status == "VSC" and vsc_pit_loss is not None
+            else neutralized_pit_loss if status in {"SC", "VSC"}
+            else green_pit_loss
         )
         projection = (
             project_pit_exit(cars, focus_driver, pit_loss, reference_lap_time)

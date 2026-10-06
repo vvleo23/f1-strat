@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from f1_pipeline.analysis.qualifying_prediction import build_qualifying_prediction
+from f1_pipeline.analysis.race_strategy import build_race_strategy
 from f1_pipeline.persistence import atomic_json
 from f1_pipeline.planning import PURPOSES
 from f1_pipeline.settings import CURATED_DATA_DIR
@@ -16,10 +17,11 @@ from f1_pipeline.sources.weekend_weather_pipeline import run_weekend_weather_pip
 
 JOB_MANIFEST_DIR = CURATED_DATA_DIR / "manifests" / "jobs"
 JOB_PURPOSES = frozenset(
-    {"weekend", "weekend_complete_v1", "replay", "qualifying_prediction"}
+    {"weekend", "weekend_complete_v1", "replay", "qualifying_prediction", "race_strategy"}
 )
 PipelineRunner = Callable[..., tuple[dict[str, Any], Path]]
 CalculationRunner = Callable[[dict[str, Any], Path], tuple[dict[str, Any], Path]]
+StrategyRunner = Callable[..., tuple[dict[str, Any], Path]]
 
 
 class JobRunnerError(RuntimeError):
@@ -39,6 +41,7 @@ class WeekendJobIntent:
     decision_time: str
     refresh: bool = False
     session_keys: tuple[int, ...] = ()
+    focus_driver: int | None = None
 
     def normalized(self) -> WeekendJobIntent:
         purpose = self.purpose.strip().casefold()
@@ -51,10 +54,12 @@ class WeekendJobIntent:
         if self.meeting_key <= 0:
             raise JobRunnerError("Meeting key must be positive.")
         if (
-            purpose in {"replay", "qualifying_prediction"}
+            purpose in {"replay", "qualifying_prediction", "race_strategy"}
             and self.target_session_key is None
         ):
             raise JobRunnerError(f"{purpose} jobs require a target session key.")
+        if purpose == "race_strategy" and self.focus_driver is None:
+            raise JobRunnerError("race_strategy jobs require a focus driver.")
         return WeekendJobIntent(
             season=int(self.season),
             meeting_key=int(self.meeting_key),
@@ -67,6 +72,7 @@ class WeekendJobIntent:
             decision_time=str(self.decision_time).strip(),
             refresh=bool(self.refresh),
             session_keys=tuple(sorted({int(value) for value in self.session_keys})),
+            focus_driver=(int(self.focus_driver) if self.focus_driver is not None else None),
         )
 
 
@@ -98,6 +104,7 @@ def run_weekend_job(
         job_dir: Path = JOB_MANIFEST_DIR,
         pipeline_runner: PipelineRunner = run_weekend_weather_pipeline,
         calculation_runner: CalculationRunner = build_qualifying_prediction,
+        strategy_runner: StrategyRunner = build_race_strategy,
 ) -> dict[str, Any]:
     normalized = intent.normalized()
     identifier = job_id(normalized)
@@ -139,6 +146,12 @@ def run_weekend_job(
             calculation, calculation_path = calculation_runner(
                 manifest, manifest_path
             )
+        elif normalized.purpose == "race_strategy":
+            calculation, calculation_path = strategy_runner(
+                manifest,
+                manifest_path,
+                focus_driver=int(normalized.focus_driver),
+            )
         completed = {
             **running,
             "status": str(
@@ -151,7 +164,9 @@ def run_weekend_job(
         }
         if calculation is not None and calculation_path is not None:
             completed["calculation_manifest_path"] = str(calculation_path)
-            completed["calculation_id"] = calculation.get("calculation_id")
+            completed["calculation_id"] = calculation.get(
+                "calculation_id", calculation.get("strategy_run_id")
+            )
             if calculation.get("status") == "unavailable":
                 diagnostics = calculation.get("diagnostics", {})
                 errors = (
@@ -181,6 +196,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--decision-time", required=True)
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--include-session-key", type=int, action="append", default=[])
+    parser.add_argument("--focus-driver", type=int)
     return parser
 
 
@@ -195,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
             decision_time=args.decision_time,
             refresh=args.refresh,
             session_keys=tuple(args.include_session_key),
+            focus_driver=args.focus_driver,
         )
     )
     print(json.dumps(result, indent=2))

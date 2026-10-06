@@ -43,6 +43,14 @@ HTML = """
       </section>
     </main>
     <aside class="panel right-panel">
+      <section class="strategy-card">
+        <div class="strategy-heading"><span>Race strategy</span><span class="strategy-state"></span></div>
+        <div class="strategy-action"></div>
+        <div class="strategy-detail"></div>
+        <div class="strategy-plan"></div>
+        <div class="strategy-reason"></div>
+        <div class="strategy-actual"></div>
+      </section>
       <div class="events-title"><span>Race Control</span><span class="event-count"></span></div>
       <div class="events"></div>
     </aside>
@@ -124,9 +132,21 @@ button { font: inherit; }
 .pit-link { fill: none; stroke: #8fd8ff; stroke-dasharray: .025 .025; stroke-linecap: round; stroke-width: .018; }
 .projection-copy { position: absolute; right: 12px; bottom: 12px; max-width: 280px; padding: 7px 9px; border: 1px solid rgba(143, 216, 255, .35); border-radius: 7px; background: rgba(7, 15, 22, .82); color: #bceaff; font-size: 10px; text-align: right; }
 .geometry-label { position: absolute; left: 12px; bottom: 12px; color: #727d8b; font-size: 9px; }
+.right-panel { display: grid; grid-template-rows: 226px 42px minmax(0, 1fr); }
+.strategy-card { overflow: hidden; padding: 11px 12px; border-bottom: 1px solid #292f39; background: #111720; }
+.strategy-heading { display: flex; align-items: center; justify-content: space-between; color: #9aa4b2; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.strategy-state { border-radius: 999px; padding: 2px 6px; background: #26303d; color: #b8c2cf; font-size: 8px; }
+.strategy-action { margin-top: 9px; color: #8fd8ff; font-size: 20px; font-weight: 900; }
+.strategy-detail { margin-top: 4px; color: #d9e0e9; font-size: 11px; line-height: 1.4; }
+.strategy-plan { display: flex; overflow: hidden; gap: 5px; margin-top: 8px; }
+.strategy-stint { min-width: 0; border: 1px solid #343d49; border-radius: 5px; padding: 3px 5px; color: #cbd3dd; font-size: 9px; white-space: nowrap; }
+.strategy-reason { margin-top: 7px; color: #929eac; font-size: 9px; line-height: 1.35; }
+.strategy-actual { margin-top: 7px; border-top: 1px solid #29313c; padding-top: 6px; color: #d0d7e0; font-size: 9px; }
+.strategy-actual.match { color: #65d18b; }
+.strategy-actual.miss { color: #ff8f87; }
 .events-title { height: 42px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid #292f39; font-size: 12px; font-weight: 800; }
 .event-count { color: #788391; font-size: 10px; font-weight: 600; }
-.events { height: calc(100% - 42px); overflow-y: auto; padding: 5px 9px; scrollbar-width: thin; scrollbar-color: #46505e transparent; }
+.events { height: 100%; min-height: 0; overflow-y: auto; padding: 5px 9px; scrollbar-width: thin; scrollbar-color: #46505e transparent; }
 .event-row { padding: 8px 4px; border-bottom: 1px solid #232a34; }
 .event-meta { display: flex; justify-content: space-between; gap: 6px; color: #7f8a99; font-size: 9px; }
 .event-message { margin-top: 3px; color: #d7dde6; font-size: 10px; line-height: 1.35; }
@@ -168,6 +188,8 @@ export default function(component) {
   const pits = Array.isArray(data.pits) ? data.pits.map(pit => ({...pit, entry: Date.parse(pit.entry_time), exit: Date.parse(pit.exit_time || pit.event_time)})).filter(pit => Number.isFinite(pit.entry) && Number.isFinite(pit.exit) && pit.entry <= pit.exit).sort((a, b) => a.entry - b.entry) : []
   const observations = Array.isArray(data.weather_observations) ? data.weather_observations.map(row => ({...row, time: Date.parse(row.event_time), available: Date.parse(row.available_at || row.event_time)})).filter(row => Number.isFinite(row.time) && Number.isFinite(row.available)).sort((a, b) => a.time - b.time) : []
   const forecasts = Array.isArray(data.forecasts) ? data.forecasts.map(row => ({...row, valid: Date.parse(row.valid_time), available: Date.parse(row.available_at), initialized: Date.parse(row.run_initialized_at), windSpeedMs: finite(row.wind_speed) ? Number(row.wind_speed) / 3.6 : null, rainValue: finite(row.rain) ? Number(row.rain) : finite(row.precipitation) ? Number(row.precipitation) : null})).filter(row => Number.isFinite(row.valid) && Number.isFinite(row.available)).sort((a, b) => a.valid - b.valid) : []
+  const strategies = Array.isArray(data.strategy_recommendations) ? data.strategy_recommendations.map(row => ({...row, time: Date.parse(row.decision_time)})).filter(row => Number.isFinite(row.time)).sort((a, b) => a.time - b.time) : []
+  const strategyEvaluations = Array.isArray(data.strategy_evaluations) ? data.strategy_evaluations.map(row => ({...row, reveal: Date.parse(row.revealed_at)})).filter(row => Number.isFinite(row.reveal)).sort((a, b) => a.reveal - b.reveal) : []
   const tyreStints = new Map()
   for (const stint of Array.isArray(data.tyre_stints) ? data.tyre_stints : []) {
     const driver = Number(stint.driver)
@@ -315,10 +337,10 @@ export default function(component) {
     const copy = query('.projection-copy')
     const layer = query('.projection-layer')
     const link = query('.pit-link')
-    if (view !== 'circle' || !frame.projection) {
+    if (!frame.projection) {
       layer.innerHTML = ''
       link.setAttribute('d', '')
-      const reason = view !== 'circle' ? 'Pit-loss projection is shown in Circle of Doom' : !finite(data.pit_loss_seconds) ? 'Pit-loss projection unavailable for this circuit' : frame.status === 'SC' || frame.status === 'VSC' ? 'Pit-loss projection paused under neutralized race status' : 'Pit-loss projection unavailable without current field gaps'
+      const reason = !finite(data.pit_loss_seconds) ? 'Pit-loss projection unavailable for this circuit' : 'Pit-loss projection unavailable without current field gaps'
       copy.textContent = reason
       return
     }
@@ -488,6 +510,54 @@ export default function(component) {
     query('.events').innerHTML = visible.length ? [...visible].reverse().map(event => `<article class="event-row"><div class="event-meta"><span>${escapeHtml(formatTime(event.time))}${event.lap_number == null ? '' : ` · Lap ${escapeHtml(event.lap_number)}`}</span><span class="event-flag">${escapeHtml(event.flag || event.category || '')}</span></div><div class="event-message">${escapeHtml(event.message || 'Race Control update')}</div></article>`).join('') : '<div class="empty">No Race Control events released yet.</div>'
   }
 
+  function driverCode(value) {
+    const driver = Number(value)
+    for (const frame of frames) {
+      const car = frame.cars.find(candidate => Number(candidate[0]) === driver)
+      if (car) return car[1]
+    }
+    return finite(value) ? `#${driver}` : 'unknown'
+  }
+
+  function renderStrategy(time) {
+    const visible = strategies.filter(row => row.time <= time)
+    const recommendation = visible.length ? visible[visible.length - 1] : null
+    const state = query('.strategy-state')
+    const action = query('.strategy-action')
+    const detail = query('.strategy-detail')
+    const plan = query('.strategy-plan')
+    const reason = query('.strategy-reason')
+    const actual = query('.strategy-actual')
+    if (!recommendation) {
+      state.textContent = data.strategy_availability || 'unavailable'
+      action.textContent = 'Unavailable'
+      detail.textContent = 'No strategy snapshot released at this replay time.'
+      plan.innerHTML = ''
+      reason.textContent = ''
+      actual.textContent = ''
+      actual.className = 'strategy-actual'
+      return
+    }
+    state.textContent = recommendation.status || 'available'
+    action.textContent = recommendation.action || 'Unavailable'
+    const tyre = recommendation.next_compound ? ` · ${recommendation.next_compound}` : ''
+    const exit = finite(recommendation.exit_position) ? `Projected exit P${Number(recommendation.exit_position)}` : 'Pit exit unavailable'
+    const neighbours = [finite(recommendation.gap_ahead) ? `${Number(recommendation.gap_ahead).toFixed(1)}s behind ${driverCode(recommendation.ahead_driver)}` : null, finite(recommendation.gap_behind) ? `${Number(recommendation.gap_behind).toFixed(1)}s ahead of ${driverCode(recommendation.behind_driver)}` : null].filter(Boolean).join(' · ')
+    detail.textContent = `${exit}${tyre}${neighbours ? ` · ${neighbours}` : ''}`
+    plan.innerHTML = (Array.isArray(recommendation.plan) ? recommendation.plan : []).map(stint => `<span class="strategy-stint">${escapeHtml(stint.compound)} · L${escapeHtml(stint.start_lap)}-${escapeHtml(stint.end_lap)}</span>`).join('')
+    reason.textContent = Array.isArray(recommendation.reasons) ? recommendation.reasons.join(' ') : ''
+    const revealed = strategyEvaluations.filter(row => row.reveal <= time)
+    const evaluation = revealed.length ? revealed[revealed.length - 1] : null
+    if (!evaluation) {
+      actual.textContent = 'Actual team decision not released yet.'
+      actual.className = 'strategy-actual'
+      return
+    }
+    const matches = Boolean(evaluation.within_two_laps) && Boolean(evaluation.compound_match)
+    actual.textContent = `Actual: lap ${evaluation.actual_pit_lap} · ${evaluation.actual_compound || 'unknown'} · ${matches ? 'matched' : 'different from recommendation'}`
+    actual.className = `strategy-actual ${matches ? 'match' : 'miss'}`
+  }
+
   function significant(event) {
     const value = `${event.flag || ''} ${event.category || ''} ${event.message || ''}`.toUpperCase()
     return ['YELLOW', 'RED FLAG', 'SAFETY CAR', 'VIRTUAL SAFETY CAR', 'SESSION STARTED', 'SESSION STOPPED'].some(token => value.includes(token))
@@ -520,6 +590,7 @@ export default function(component) {
       renderPositions(frames[index], currentTime)
       renderWeather(currentTime)
       renderEvents(currentTime)
+      renderStrategy(currentTime)
       panelFrameIndex = index
       lastPanelSecond = second
     }

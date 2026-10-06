@@ -16,12 +16,14 @@ from f1_pipeline.dashboard.qualifying_prediction import render_qualifying_predic
 from f1_pipeline.dashboard.read_models import (
     DashboardDataError,
     QualifyingPrediction,
+    RaceStrategy,
     SeasonCatalog,
     SessionDataState,
     available_seasons,
     load_forecast,
     load_latest_standings,
     load_qualifying_prediction,
+    load_race_strategy,
     load_qualifying_results,
     load_season_catalog,
     load_season_results,
@@ -352,6 +354,23 @@ def _prediction_job_payload(season: int, session: pd.Series) -> dict[str, Any]:
         "decision_time": _prediction_decision_time(session),
         "refresh": False,
         "session_keys": [],
+    }
+
+
+def _strategy_job_payload(
+    season: int,
+    session: pd.Series,
+    focus_driver: int,
+) -> dict[str, Any]:
+    return {
+        "season": season,
+        "meeting_key": source_meeting_key(session["meeting_id"]),
+        "purpose": "race_strategy",
+        "target_session_key": source_session_key(session["session_id"]),
+        "decision_time": _decision_time(session),
+        "refresh": False,
+        "session_keys": [],
+        "focus_driver": int(focus_driver),
     }
 
 
@@ -1018,14 +1037,41 @@ def _session_dialog(
                     _open_prediction(season, session_key)
                 else:
                     _submit(_prediction_job_payload(season, session), session_key)
-        elif feature_label:
-            columns[2].button(
-                feature_label,
-                disabled=True,
-                width="stretch",
-                help="Planned for a later product version.",
-                key=f"future_feature_{session_key}",
+        elif feature_label == "Race Strategy":
+            try:
+                strategy: RaceStrategy | None = (
+                    load_race_strategy(session_key, int(focus_driver))
+                    if focus_driver is not None
+                    else None
+                )
+            except DashboardDataError as exc:
+                st.warning(f"Strategy data is incomplete: {exc}")
+                strategy = None
+            strategy_label = (
+                "Open Strategy Re-Live"
+                if strategy is not None and replay_ready
+                else "Prepare Re-Live"
+                if strategy is not None
+                else feature_label
             )
+            if columns[2].button(
+                strategy_label,
+                disabled=focus_driver is None,
+                width="stretch",
+                key=f"race_strategy_{session_key}",
+            ):
+                if strategy is not None and replay_ready:
+                    _open_replay(season, session, int(focus_driver))
+                elif strategy is not None:
+                    _submit(
+                        _job_payload(season, session, purpose="replay", refresh=False),
+                        session_key,
+                    )
+                else:
+                    _submit(
+                        _strategy_job_payload(season, session, int(focus_driver)),
+                        session_key,
+                    )
 
         confirmation_key = f"confirm_reload_{session_key}"
         if load_clicked and state.loaded:

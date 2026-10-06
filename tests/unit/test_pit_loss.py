@@ -11,6 +11,8 @@ class PitLossConfigTest(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertAlmostEqual(result.seconds, 21.6355)
+        self.assertAlmostEqual(result.vsc_seconds, 12.9813)
+        self.assertAlmostEqual(result.sc_seconds, 10.81775)
         self.assertEqual(result.source_asset, "docs/assets/pitstop.png")
 
     def test_unknown_circuit_has_no_global_fallback(self) -> None:

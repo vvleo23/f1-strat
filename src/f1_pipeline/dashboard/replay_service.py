@@ -181,6 +181,8 @@ def replay_payload(
     circle: TrackGeometry,
     stored: TrackGeometry | None,
     pit_loss_seconds: float | None,
+    vsc_pit_loss_seconds: float | None,
+    sc_pit_loss_seconds: float | None,
     stints: pd.DataFrame,
 ) -> dict[str, Any]:
     frames: list[dict[str, Any]] = []
@@ -234,6 +236,12 @@ def replay_payload(
         "focus_driver": focus_driver,
         "focus_acronym": focus_acronym,
         "pit_loss_seconds": _number(pit_loss_seconds),
+        "pit_loss_by_status": {
+            "GREEN": _number(pit_loss_seconds),
+            "YELLOW": _number(pit_loss_seconds),
+            "VSC": _number(vsc_pit_loss_seconds),
+            "SC": _number(sc_pit_loss_seconds),
+        },
         "tyre_stints": stint_history_payload(stints),
         "frames": frames,
         "geometries": {
@@ -253,6 +261,8 @@ def build_replay_view(
         frame_seconds: int = DEFAULT_FRAME_SECONDS,
         decision_time: str | pd.Timestamp | None = None,
         pit_loss_seconds: float | None = None,
+        vsc_pit_loss_seconds: float | None = None,
+        sc_pit_loss_seconds: float | None = None,
 ) -> ReplayView:
     bundle = replay_bundle(session_key)
     datasets = bundle.frames
@@ -284,6 +294,8 @@ def build_replay_view(
         frame_seconds=frame_seconds,
         max_staleness_seconds=DEFAULT_MAX_STALENESS_SECONDS,
         decision_time=decision_time,
+        vsc_pit_loss=vsc_pit_loss_seconds,
+        sc_pit_loss=sc_pit_loss_seconds,
     )
     circle = synthetic_track_geometry()
     try:
@@ -303,6 +315,8 @@ def build_replay_view(
         circle=circle,
         stored=stored,
         pit_loss_seconds=pit_loss_seconds,
+        vsc_pit_loss_seconds=vsc_pit_loss_seconds,
+        sc_pit_loss_seconds=sc_pit_loss_seconds,
         stints=datasets["stints"],
     )
     payload["replay_status"] = bundle.status

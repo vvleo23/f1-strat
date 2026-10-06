@@ -1,7 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "unit": "seconds",
   "source_asset": "docs/assets/pitstop.png",
+  "neutralized_factors": {
+    "vsc": 0.60,
+    "sc": 0.50,
+    "basis": "Versioned MVP assumption applied to the circuit green-flag average; not a measured SC/VSC value."
+  },
   "overall_average": 24.1824545,
   "circuits": [
     {"key": "bahrain", "aliases": ["Bahrain", "Bahrain Grand Prix"], "average_pit_loss": 24.99976},

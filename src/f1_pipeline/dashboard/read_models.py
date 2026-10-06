@@ -65,6 +65,14 @@ class QualifyingPrediction:
     manifest_path: Path
 
 
+@dataclass(frozen=True)
+class RaceStrategy:
+    recommendations: pd.DataFrame
+    evaluations: pd.DataFrame
+    snapshot: dict[str, Any]
+    manifest_path: Path
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -561,4 +569,58 @@ def load_qualifying_prediction(
                     f"Qualifying prediction has {len(rows)} rows; expected {expected_rows}."
                 )
             return QualifyingPrediction(rows, snapshot, path)
+    return None
+
+
+def load_race_strategy(
+    session_key: int,
+    focus_driver: int,
+    *,
+    manifest_dir: Path | None = None,
+) -> RaceStrategy | None:
+    for directory in _manifest_dirs(manifest_dir):
+        candidates: list[tuple[pd.Timestamp, dict[str, Any], Path]] = []
+        calculation_dir = directory / "calculations"
+        for path in calculation_dir.glob(
+            f"race_strategy_{session_key}_{focus_driver}_*.json"
+        ):
+            try:
+                snapshot = _load_json(path)
+            except DashboardDataError:
+                continue
+            if (
+                snapshot.get("calculation_type") != "race_strategy"
+                or snapshot.get("status") not in READABLE_STATUSES
+                or not isinstance(snapshot.get("outputs"), dict)
+            ):
+                continue
+            calculated_at = pd.to_datetime(
+                str(snapshot.get("calculated_at", "")), utc=True, errors="coerce"
+            )
+            if not isinstance(calculated_at, pd.Timestamp) or pd.isna(calculated_at):
+                calculated_at = pd.Timestamp(path.stat().st_mtime, unit="s", tz="UTC")
+            candidates.append((calculated_at, snapshot, path))
+        if not candidates:
+            continue
+        _, snapshot, path = max(candidates, key=lambda item: (item[0], item[2].name))
+        outputs = snapshot["outputs"]
+        recommendation_output = outputs.get("recommendations", {})
+        evaluation_output = outputs.get("evaluations", {})
+        recommendations = _read_verified_parquet(
+            str(recommendation_output["reference"]),
+            str(recommendation_output.get("sha256"))
+            if recommendation_output.get("sha256")
+            else None,
+        )
+        evaluations = _read_verified_parquet(
+            str(evaluation_output["reference"]),
+            str(evaluation_output.get("sha256"))
+            if evaluation_output.get("sha256")
+            else None,
+        )
+        if len(recommendations) != int(recommendation_output.get("row_count", len(recommendations))):
+            raise DashboardDataError("Race strategy recommendation row count is invalid.")
+        if len(evaluations) != int(evaluation_output.get("row_count", len(evaluations))):
+            raise DashboardDataError("Race strategy evaluation row count is invalid.")
+        return RaceStrategy(recommendations, evaluations, snapshot, path)
     return None

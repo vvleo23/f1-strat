@@ -6,7 +6,7 @@ This `README.md` is the **Single Source of Truth** for project scope, architectu
 
 ## Project goal
 
-The main product is a reliable, season-parameterized data pipeline for any selected Formula 1 race weekend available from OpenF1. It discovers the meeting and its sessions, runs bounded ingestion jobs, preserves immutable source snapshots, normalizes them, and records their quality and lineage. Pipeline and Dashboard V1 add a historical replay and a small read-only UI. Calculation snapshots, predictions, online strategy, and pit-window recommendations are post-V1 consumers; none of these consumers owns ingestion.
+The main product is a reliable, season-parameterized data pipeline for any selected Formula 1 race weekend available from OpenF1. It discovers the meeting and its sessions, runs bounded ingestion jobs, preserves immutable source snapshots, normalizes them, and records their quality and lineage. Pipeline and Dashboard V1 add a historical replay and a small read-only UI. Manifest-backed qualifying and online race-strategy baselines are post-V1 consumers; neither consumer owns ingestion.
 
 Free live OpenF1 data is not assumed. Pipeline and Dashboard V1 load historical data after a session becomes available and simulate live arrival through event-time replay. Full historical race data may exist on disk, but later calculations may only access the data released by the replay up to `decision_time`.
 
@@ -25,7 +25,7 @@ flowchart LR
     Store[(Parquet snapshots,<br/>curated data, and manifests)]
     Replay[Historical point-in-time replay]
     Analysis[Pace and source analysis]
-    Calculations["Calculation snapshots and<br/>strategy recommendations<br/>(planned)"]
+    Calculations["Calculation snapshots and<br/>strategy recommendations"]
     UI["Read-only Streamlit dashboard"]
 
     OpenF1 --> Pipeline
@@ -50,10 +50,10 @@ flowchart LR
 | Weather pipeline | Immutable Open-Meteo forecasts plus separate OpenF1/FastF1 observations | Pipeline MVP | Generic circuit-reference path implemented; forecast coverage depends on provider availability |
 | Season overview | Calendar, sessions, driver/team standings, wins, and podium counts | Dashboard V1 | Implemented from curated OpenF1 facts |
 | Qualifying calculation | Full predicted classification plus per-driver Top-15/Top-10/Top-5 probabilities | Later analysis | Transparent baseline and first manifest-backed walk-forward runner implemented; wider event and forecast coverage is still required |
-| Race calculation | Online strategy and pit-window recommendations from the current replay state | Post-V1 analysis | Planned |
-| Dashboard | Small read-only view of curated data, results, standings, replay, weather, and Race Control | Dashboard V1 | Season overview and single-screen Re-Live implemented |
+| Race calculation | Online tyre and pit-lap recommendation from the current replay state, including projected pit exit | Post-V1 analysis | Transparent rule baseline and manifest-backed per-driver snapshots implemented; wider backtesting remains required |
+| Dashboard | Small read-only view of curated data, results, standings, replay, weather, Race Control, and strategy | Dashboard V1 plus post-V1 consumers | Season overview and single-screen Re-Live with strategy panel implemented |
 
-Rain radar is rejected. Qualifying prediction, race prediction, strategy recommendation, and pit-window calculation are not Pipeline and Dashboard V1 requirements. Circle of Doom shows a transparent immediate-stop projection for the selected driver only when a configured circuit average and current green-flag gaps are available. It is an assumption, not a strategy recommendation.
+Rain radar is rejected. Qualifying prediction and strategy recommendation are post-V1 consumers, not Pipeline and Dashboard V1 requirements. Circle of Doom shows a transparent immediate-stop projection for the selected driver when a configured circuit loss and current gaps are available. The separate versioned strategy baseline turns the same point-in-time race state into a recommendation.
 
 ## Weekend loading policy
 
@@ -75,7 +75,7 @@ The repository includes a 3.6 MiB Hungaroring demo dataset with one race, weathe
 
 ## Current status
 
-Last updated: **4 September 2026**
+Last updated: **6 October 2026**
 
 ### Implemented
 
@@ -100,9 +100,10 @@ Last updated: **4 September 2026**
 - canonical Silver `session_entry`, `lap`, `interval`, `position`, `pit_stop`, `stint`, `race_control_event`, `weather_observation`, `starting_grid`, `session_result`, `driver_championship_standing`, and `team_championship_standing` facts
 - read-only Streamlit season overview and session replay with point-in-time tyre-stint history backed by manifest-selected, hash-verified curated data
 - Re-Live inactivity handling that removes cars after 90 stationary green-flag seconds while retaining a dimmed `OUT` driver row and allowing later movement to reactivate the car
-- separate local HTTP job service with deterministic intents and persisted status for selected-session, Weekend Complete V1, replay, and qualifying-prediction actions
+- separate local HTTP job service with deterministic intents and persisted status for selected-session, Weekend Complete V1, replay, qualifying-prediction, and race-strategy actions
 - automatic manifest-bound local centerlines in season-partitioned geometry dimensions
 - leakage-free Circle-of-Doom replay with point-in-time reference pace, causal lap progress, released stint visibility, inactive-driver-safe pit-exit positions, synthetic-circle default, and optional stored geometry
+- manifest-backed per-driver race-strategy baseline with pre-race plans, event-driven replanning, compound and pit-lap recommendations, SC/VSC-adjusted total pit loss, field-aware pit-exit projection, and a timestamped comparison with actual stops
 - OpenF1 pace-by-stint analysis with a separate FastF1 driver-level comparison
 - focused unit tests for validation, master data, geometry, pace, replay, session selection, result/standing ingestion, and job execution
 - bundled hash-verified Hungaroring demo data with automatic dashboard fallback
@@ -120,6 +121,8 @@ Last updated: **4 September 2026**
 - Sprint session planning is implemented and unit-tested, but the current Hungary acceptance weekend has no Sprint.
 - Track centerlines are local OpenF1 display geometry, not geographic map geometry.
 - The first local qualifying walk-forward run scores only 5 of 14 completed 2026 main Qualifying sessions because required local manifests are missing for the others. It does not validate weather parameters because point-in-time forecast coverage is incomplete. On this small sample, the latest one-lap baseline has lower position error and better Top-N Brier scores than the calibrated model, so no production weights have been changed.
+- The first race-strategy acceptance run covers Hungary 2026 for one focus driver and two actual stops. It proves the point-in-time calculation and UI path, not predictive quality. SC/VSC loss factors are versioned assumptions, physical tyre-set availability is unknown, and broader driver/event backtesting is still required.
+- Race strategy currently requires a circuit pit-loss row and a pre-race distance in the season-specific `race_distance_laps.json`; only the covered 2026 circuits run without configuration changes. The service fails closed instead of inferring race distance from the completed result.
 - The new cross-meeting lock covers jobs started through the weekend-weather pipeline (dashboard and CLI weekend runs); a concurrent direct `python -m f1_pipeline.master_data` CLI call is not covered. A waiting job also redoes the full season master-data rebuild after acquiring the lock rather than reusing the winner's result; accepted for a single-user tool rather than optimized away.
 - `OpenF1Client` rate-limits requests per instance, not per season or globally, so several concurrent jobs can still add up to a higher combined request rate than intended; not fixed for now (see decision log — deprioritized as a scaling concern for a private, single-user tool).
 - A single historical HTTP 401 from the OpenF1 `meetings` endpoint was observed with no retry budget (401 is not in the retry status list); not reproduced since and not fixed for now.
@@ -127,7 +130,7 @@ Last updated: **4 September 2026**
 ### Not implemented
 
 - delayed retry scheduler and automatic session finalization
-- race calculations and strategy recommendations
+- race-result prediction and a validated counterfactual race-strategy model
 - paid live ingestion
 - a shared rate limit across concurrent OpenF1 jobs and a retry budget for transient HTTP 401 responses (see "Partly implemented"; deprioritized for a private, single-user tool)
 
@@ -139,19 +142,21 @@ f1-strat/
 ├── demo_data/                   # Small bundled dashboard and replay dataset
 ├── config/
 │   ├── reviewed_circuit_mappings.json # Reviewed OpenF1-to-Wikidata identities
-│   └── pit_loss_seconds.json          # Editable circuit-average pit losses
+│   ├── pit_loss_seconds.json          # Total green pit losses plus SC/VSC assumptions
+│   └── race_distance_laps.json        # Static pre-race 2026 race distances
 ├── docs/
 │   ├── projektdokumentation.md # German project report
 │   ├── sources/                # One English card per external source
 │   └── assets/                 # Figures used by the project report
 ├── src/f1_pipeline/
-│   ├── analysis/               # Pace analysis and qualifying prediction
+│   ├── analysis/               # Pace, qualifying, and race-strategy calculations
 │   ├── replay/                 # Point-in-time replay
 │   ├── sources/                # Source verification and ingestion
 │   │   └── openf1.py           # Shared OpenF1 transport and Bronze path conventions
 │   ├── data_validation.py
 │   ├── planning.py              # Purpose and decision-time session planning
 │   ├── persistence.py          # Atomic file persistence and hashing
+│   ├── pit_loss.py             # Validated circuit and track-status pit loss
 │   ├── session_facts.py        # Canonical OpenF1 Silver facts
 │   ├── temporal.py             # Shared strict decision-time fact cut
 │   ├── demo_data.py            # Rebuild the bundled demo from local snapshots
@@ -206,7 +211,7 @@ flowchart LR
     subgraph Consumers[Point-in-time consumers]
         Cut[Decision-time data cut]
         RaceState[Race State and features]
-        Strategy["Calculation snapshots and<br/>strategy service — planned"]
+        Strategy["Calculation snapshots and<br/>strategy service"]
     end
 
     subgraph Gold["Gold — data/artifacts"]
@@ -377,6 +382,8 @@ next chronological trigger
 - Every result retains its input snapshot and versions so the same state can be reproduced.
 - A missing minimum input produces `partial` or `unavailable`, not a fabricated prediction.
 
+The race-strategy baseline is deliberately rule-based. Prior completed sessions provide driver pace, compound offsets, degradation, and observed stint-length limits. At every trigger it evaluates legal one- and two-stop candidates for the focus driver against the point-in-time state of the full field. It minimizes projected finishing position first and remaining time second, reports the next compound and pit lap, and projects the pit-exit position and immediate neighbours. Forecast rain within the actionable horizon, observed rain, SC/VSC status, and already used compounds can change the plan. The configured circuit value is total race-time loss from stopping versus staying out; it is larger than stationary service time. Green loss comes from `docs/assets/pitstop.png`; VSC `0.60` and SC `0.50` multipliers are explicit MVP assumptions, not measured values. The baseline does not know physical tyre-set inventory, future cautions, or exact competitor reactions and therefore does not establish that a counterfactual strategy would have produced a better race result.
+
 ## Weather policy
 
 - During a future selected weekend, the Weather Forecast API is captured on the target schedule; `retrieved_at` proves when the snapshot was available to this project.
@@ -409,8 +416,8 @@ The provider API or library is outside the project data lake. **Bronze, or Stage
 |---|---|---|---|
 | OpenF1 `meetings`, `sessions` | Event keys, names, types, scheduled start/end times | Season/weekend/session selection, planner, replay boundary | Primary; backend and dashboard implemented |
 | OpenF1 `drivers` | Driver number, acronym, team, colour, session identity | Driver/team dimensions, session entries, replay labels | Primary; implemented |
-| OpenF1 `laps`, `stints` | Lap and sector timing, stint, compound and tyre age | Pace analysis, replay; later qualifying and strategy features | Primary; ingestion implemented, calculations planned |
-| OpenF1 `intervals`, `position`, `pit` | Gaps, order, position changes and pit stops | Re-live state and later field-aware strategy | Primary; implemented for applicable session types |
+| OpenF1 `laps`, `stints` | Lap and sector timing, stint, compound and tyre age | Pace analysis, replay, qualifying and strategy features | Primary; ingestion and baseline consumers implemented |
+| OpenF1 `intervals`, `position`, `pit` | Gaps, order, position changes and pit stops | Re-live state and field-aware strategy | Primary; implemented for applicable session types |
 | OpenF1 `race_control` | Timestamped flags, categories and messages | Re-live event feed and track-status triggers | Primary; facts and replay panel implemented |
 | OpenF1 `weather` | Timestamped track observations | Weather cut, forecast evaluation and later re-live context | Primary observation; implemented |
 | OpenF1 `location` | Timestamped local `x/y/z` vehicle coordinates | Circle/track replay progress and season-partitioned Silver local centerline | Primary display input; automatic for ingested sprint/race sessions |
@@ -424,21 +431,21 @@ OpenF1 `location.x/y/z` is not a geographic track map. The stored track view is 
 
 ## Presentation boundary
 
-Dashboard V1 uses Streamlit, Plotly for overview charts, and an isolated Streamlit Components v2 renderer for synchronized Re-Live playback. It remains a small read-only consumer of curated data and artifacts: no source requests, snapshot writes, orchestration, or model fitting occur inside UI code. Data actions submit intents to the separate local job service. Qualifying Calculation Snapshots are produced by that service; strategy outputs remain disabled until their pipeline service exists.
+Dashboard V1 uses Streamlit, Plotly for overview charts, and an isolated Streamlit Components v2 renderer for synchronized Re-Live playback. It remains a small read-only consumer of curated data and artifacts: no source requests, snapshot writes, orchestration, or model fitting occur inside UI code. Data actions submit intents to the separate local job service. Qualifying and race-strategy Calculation Snapshots are produced by that service.
 
-The Analysis Dashboard is the single entry point. It shows every race weekend in the selected season as a calendar card with its discovered practice, sprint, qualifying, and race sessions. Manifest-backed states distinguish locally loaded, not-yet-loaded, and not-yet-available sessions. Selecting a Grand Prix opens a local weekend overview with the data-derived season round, compact session/coordinate/weather states, a stored-track preview when present, qualifying and race result tables when available, and a complete-weekend load intent. Qualifying gaps use the last session segment reached by each driver; race gaps preserve seconds, lap deficits, DNF, DNS, and DSQ from the normalized result. Classified race positions also show the change from the qualifying result with green gain, red loss, and grey unchanged indicators; unclassified results remain `NC`. Session dialogs submit lightweight loads, confirm explicit reloads, prepare missing replay data, and require a focus driver before opening Re-Live. Qualifying and Sprint Qualifying dialogs can submit a separate prediction job and open its manifest-backed classification with focus-driver Top-15/Top-10/Top-5 probabilities. Within Re-Live, the project name returns to the dashboard. Driver and constructor standings are displayed side by side below the calendar; the driver table includes numbers, wins, and podiums. Standings progression, teammate comparison, grid-to-finish extremes, and fastest valid stationary stops use only locally loaded facts and expose their race and row coverage. Re-Live fits a 1920×1080 desktop without page scrolling and synchronizes the current order, Circle-of-Doom or stored-track cars, weather observations, session-relevant forecast slots, pit state, and Race Control with one replay clock. Position changes move the affected driver rows into their new order and show a temporary green upward or red downward triangle for gains and losses. Pit-lane state uses the physical interval ending at the OpenF1 pit timestamp, including red-flag stops, instead of incorrectly starting the duration at that exit timestamp. Its position list shows each driver's already-started tyre stints from oldest to newest as compound-coloured icons; hover text reports compound, stint number, lap range, stint length, and active state without displaying future stints early. Significant Race Control events also appear as a temporary bottom notification. Race Strategy, pit windows, assumptions, and alternatives remain planned and disabled.
+The Analysis Dashboard is the single entry point. It shows every race weekend in the selected season as a calendar card with its discovered practice, sprint, qualifying, and race sessions. Manifest-backed states distinguish locally loaded, not-yet-loaded, and not-yet-available sessions. Selecting a Grand Prix opens a local weekend overview with the data-derived season round, compact session/coordinate/weather states, a stored-track preview when present, qualifying and race result tables when available, and a complete-weekend load intent. Qualifying gaps use the last session segment reached by each driver; race gaps preserve seconds, lap deficits, DNF, DNS, and DSQ from the normalized result. Classified race positions also show the change from the qualifying result with green gain, red loss, and grey unchanged indicators; unclassified results remain `NC`. Session dialogs submit lightweight loads, confirm explicit reloads, prepare missing replay data, and require a focus driver before opening Re-Live. Qualifying and Sprint Qualifying dialogs can submit a separate prediction job and open its manifest-backed classification with focus-driver Top-15/Top-10/Top-5 probabilities. Race dialogs can create a per-driver strategy calculation and open it in Re-Live. Within Re-Live, the project name returns to the dashboard. Driver and constructor standings are displayed side by side below the calendar; the driver table includes numbers, wins, and podiums. Standings progression, teammate comparison, grid-to-finish extremes, and fastest valid stationary stops use only locally loaded facts and expose their race and row coverage. Re-Live fits a 1920×1080 desktop without page scrolling and synchronizes the current order, Circle-of-Doom or stored-track cars, weather observations, session-relevant forecast slots, pit state, Race Control, and the latest released strategy snapshot with one replay clock. The strategy panel shows the action, next compound, planned stints, projected pit-exit position and neighbours, reason, and the actual team choice only after it becomes known. Position changes move the affected driver rows into their new order and show a temporary green upward or red downward triangle for gains and losses. Pit-lane state uses the physical interval ending at the OpenF1 pit timestamp, including red-flag stops, instead of incorrectly starting the duration at that exit timestamp. Its position list shows each driver's already-started tyre stints from oldest to newest as compound-coloured icons; hover text reports compound, stint number, lap range, stint length, and active state without displaying future stints early. Significant Race Control events also appear as a temporary bottom notification.
 
 ### Dashboard V1 and post-V1 extensions
 
 | Product area | Available in V1 | Post-V1 extensions or operational gaps |
 |---|---|---|
-| Analysis Dashboard | Read-only season calendar cards, manifest-backed session states, standings, wins, podiums, and qualifying prediction results | Calculation history and race outputs |
+| Analysis Dashboard | Read-only season calendar cards, manifest-backed session states, standings, wins, podiums, qualifying results, and race-strategy replay | Calculation history and aggregate strategy evaluation |
 | Year/weekend/session selection | Season control, discovered weekend cards, local weekend and session dialogs, validated CLI filters, and persisted job status | Delayed scheduling and automatic finalization |
 | Purpose-based loading | `weekend`, `weekend_complete_v1`, `replay`, `qualifying_prediction`, and `race_strategy` session plans; session-type endpoint profiles | Feature-level endpoint plans across all sources and automatic finalization |
 | Complete-weekend state | Red weekend-card frame when all discovered sessions have local data; `weekend_complete_v1` remains available through the service and CLI | Full matching FastF1 weekend, multiple forecast vintages, and retry queue |
 | Qualifying calculation | Leakage-free session-weighted baseline, local-history calibration, deterministic simulation, full classification, Top-15/10/5 probabilities, and a manifest-backed walk-forward runner | Broader event and point-in-time forecast coverage before evidence-based model changes |
-| Session Re-Live | Focus-driver selection before entry; synchronized Circle-of-Doom/stored centerline, order, tyre-stint history, pit state, weather, forecast, Race Control and playback controls | Persisted race-state service and later calculation panels |
-| Strategy recommendation | Pit, stint, interval, position, weather and race-state inputs | Versioned algorithm, pit window, alternatives, uncertainty and Calculation Snapshots |
+| Session Re-Live | Focus-driver selection before entry; synchronized Circle-of-Doom/stored centerline, order, tyre-stint history, pit state, weather, forecast, Race Control, strategy and playback controls | Persisted race-state service |
+| Strategy recommendation | Versioned rule baseline using pit, stint, lap, interval, position, weather, Race Control and full-field state; immutable per-trigger snapshots and actual-stop comparison | Wider walk-forward validation, uncertainty, tyre-set inventory and stronger competitor reactions |
 
 The session-dialog Load Data, Re-Live, and Quali Prediction controls hand deterministic job intents to a separate local HTTP service. Re-loading existing local data requires confirmation and sets `refresh=true`. The dashboard process itself remains read-only: it does not call providers, write snapshots, or execute the pipeline, and it only observes job status, curated data, manifests, and artifacts. The service persists job state but is not a delayed scheduler or distributed queue.
 
@@ -594,6 +601,12 @@ Build a historical pre-session Qualifying Prediction through the controlled job 
 
 ```bash
 python -m f1_pipeline.job_runner --season 2026 --meeting-key 1291 --purpose qualifying_prediction --target-session-key 11338 --decision-time 2026-07-25T14:00:00Z
+```
+
+Build a point-in-time Race Strategy timeline for one focus driver:
+
+```bash
+python -m f1_pipeline.job_runner --season 2026 --meeting-key 1291 --purpose race_strategy --target-session-key 11342 --focus-driver 1 --decision-time 2026-07-26T16:00:00Z
 ```
 
 Run the local qualifying walk-forward comparison without fetching new data:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -11,6 +12,7 @@ from f1_pipeline.dashboard.read_models import (
     DashboardDataError,
     SeasonCatalog,
     load_forecast,
+    load_race_strategy,
     load_session_bundle,
     source_meeting_key,
 )
@@ -18,7 +20,7 @@ from f1_pipeline.dashboard.re_live_component import render_re_live
 from f1_pipeline.dashboard.replay_service import build_replay_view
 from f1_pipeline.temporal import TemporalCutError, cut_facts
 
-REPLAY_CACHE_VERSION = 5
+REPLAY_CACHE_VERSION = 6
 
 
 @st.cache_data(show_spinner="Building historical replay…", max_entries=8)
@@ -30,6 +32,8 @@ def replay_for(
         focus_driver: int,
         decision_time: str,
         pit_loss_seconds: float | None,
+        vsc_pit_loss_seconds: float | None,
+        sc_pit_loss_seconds: float | None,
         cache_version: int,
 ):
     if cache_version != REPLAY_CACHE_VERSION:
@@ -43,6 +47,8 @@ def replay_for(
         decision_time=decision_time,
         frame_seconds=4,
         pit_loss_seconds=pit_loss_seconds,
+        vsc_pit_loss_seconds=vsc_pit_loss_seconds,
+        sc_pit_loss_seconds=sc_pit_loss_seconds,
     )
 
 
@@ -195,6 +201,73 @@ def _pit_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
     return rows
 
 
+def _json_list(value: Any) -> list[Any]:
+    if not isinstance(value, str):
+        return []
+    try:
+        result = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return result if isinstance(result, list) else []
+
+
+def _strategy_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for record in frame.to_dict(orient="records"):
+        decision_time = _timestamp(record.get("decision_time"))
+        if decision_time is None:
+            continue
+        rows.append(
+            {
+                "calculation_id": _text(record.get("calculation_id")),
+                "decision_time": decision_time,
+                "status": _text(record.get("status")),
+                "trigger_type": _text(record.get("trigger_type")),
+                "lap": _number(record.get("lap_number")),
+                "race_status": _text(record.get("race_status")),
+                "current_compound": _text(record.get("current_compound")),
+                "current_position": _number(record.get("current_position")),
+                "action": _text(record.get("action")),
+                "pit_lap": _number(record.get("recommended_pit_lap")),
+                "laps_until_pit": _number(record.get("laps_until_pit")),
+                "next_compound": _text(record.get("next_compound")),
+                "exit_position": _number(record.get("expected_exit_position")),
+                "finish_position": _number(record.get("expected_finish_position")),
+                "remaining_seconds": _number(record.get("expected_remaining_seconds")),
+                "ahead_driver": _number(record.get("ahead_driver")),
+                "behind_driver": _number(record.get("behind_driver")),
+                "gap_ahead": _number(record.get("gap_ahead_seconds")),
+                "gap_behind": _number(record.get("gap_behind_seconds")),
+                "traffic": _text(record.get("traffic_state")),
+                "plan": _json_list(record.get("plan_json")),
+                "reasons": _json_list(record.get("reasons_json")),
+            }
+        )
+    return rows
+
+
+def _strategy_evaluations(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for record in frame.to_dict(orient="records"):
+        revealed_at = _timestamp(record.get("revealed_at"))
+        if revealed_at is None:
+            continue
+        rows.append(
+            {
+                "revealed_at": revealed_at,
+                "actual_pit_lap": _number(record.get("actual_pit_lap")),
+                "actual_compound": _text(record.get("actual_compound")),
+                "recommended_pit_lap": _number(record.get("recommended_pit_lap")),
+                "recommended_compound": _text(record.get("recommended_compound")),
+                "lap_error": _number(record.get("lap_error")),
+                "within_one_lap": bool(record.get("within_one_lap")),
+                "within_two_laps": bool(record.get("within_two_laps")),
+                "compound_match": bool(record.get("compound_match")),
+            }
+        )
+    return rows
+
+
 def _replay_styles() -> None:
     st.markdown(
         """
@@ -260,6 +333,7 @@ def render_session_replay(catalog: SeasonCatalog, session_key: int) -> None:
             meeting.get("meeting_name"),
             meeting.get("location"),
             circuit_name,
+            country_name,
         )
     except PitLossConfigError as exc:
         st.warning(str(exc))
@@ -273,6 +347,8 @@ def render_session_replay(catalog: SeasonCatalog, session_key: int) -> None:
             int(focus_driver),
             decision_time.isoformat(),
             pit_loss.seconds if pit_loss is not None else None,
+            pit_loss.vsc_seconds if pit_loss is not None else None,
+            pit_loss.sc_seconds if pit_loss is not None else None,
             REPLAY_CACHE_VERSION,
         )
     except (DashboardDataError, ValueError, OSError) as exc:
@@ -283,6 +359,11 @@ def render_session_replay(catalog: SeasonCatalog, session_key: int) -> None:
     race_control = _cut(session_silver(session_key, "race_control"), decision_time)
     pits = _cut(session_silver(session_key, "pit"), decision_time)
     forecasts = forecast_for(session_key)
+    try:
+        strategy = load_race_strategy(session_key, int(focus_driver))
+    except DashboardDataError as exc:
+        st.warning(f"Strategy data is incomplete: {exc}")
+        strategy = None
     payload = {
         **view.payload,
         "meeting": {
@@ -306,6 +387,20 @@ def render_session_replay(catalog: SeasonCatalog, session_key: int) -> None:
             "pits": "available" if not pits.empty else "unavailable",
         },
         "pit_loss_source": pit_loss.source_asset if pit_loss is not None else None,
+        "pit_loss_assumption": (
+            pit_loss.neutralized_basis if pit_loss is not None else None
+        ),
+        "strategy_recommendations": (
+            _strategy_records(strategy.recommendations) if strategy is not None else []
+        ),
+        "strategy_evaluations": (
+            _strategy_evaluations(strategy.evaluations) if strategy is not None else []
+        ),
+        "strategy_availability": (
+            str(strategy.snapshot.get("status", "unavailable"))
+            if strategy is not None
+            else "unavailable"
+        ),
     }
     render_re_live(
         payload,

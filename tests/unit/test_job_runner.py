@@ -6,6 +6,7 @@ from pathlib import Path
 
 from f1_pipeline.job_runner import (
     JobAlreadyRunningError,
+    JobRunnerError,
     WeekendJobIntent,
     job_id,
     run_weekend_job,
@@ -99,6 +100,50 @@ class JobRunnerTest(unittest.TestCase):
         self.assertEqual(result["calculation_id"], "calculation-1")
         self.assertEqual(result["calculation_manifest_path"], "calculation.json")
         self.assertEqual(len(calls), 1)
+
+    def test_strategy_job_passes_focus_driver_to_calculation(self) -> None:
+        intent = WeekendJobIntent(
+            season=2026,
+            meeting_key=1291,
+            purpose="race_strategy",
+            target_session_key=11342,
+            decision_time="2026-07-26T16:00:00Z",
+            focus_driver=4,
+        )
+        calls: list[int] = []
+
+        def pipeline(**kwargs: object):
+            return {"status": "available", "run_id": "run-3"}, Path("pipeline.json")
+
+        def strategy(manifest: dict[str, object], path: Path, *, focus_driver: int):
+            calls.append(focus_driver)
+            return (
+                {"status": "available", "strategy_run_id": "strategy-1"},
+                Path("strategy.json"),
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            result = run_weekend_job(
+                intent,
+                job_dir=Path(temporary),
+                pipeline_runner=pipeline,
+                strategy_runner=strategy,
+            )
+
+        self.assertEqual(result["calculation_id"], "strategy-1")
+        self.assertEqual(calls, [4])
+
+    def test_strategy_job_requires_focus_driver(self) -> None:
+        intent = WeekendJobIntent(
+            season=2026,
+            meeting_key=1291,
+            purpose="race_strategy",
+            target_session_key=11342,
+            decision_time="2026-07-26T16:00:00Z",
+        )
+
+        with self.assertRaisesRegex(JobRunnerError, "focus driver"):
+            intent.normalized()
 
 
 if __name__ == "__main__":
