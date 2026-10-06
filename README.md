@@ -111,6 +111,7 @@ Last updated: **6 October 2026**
 - unified m/s wind-speed display and hourly-to-target linear interpolation (circular for wind direction) between the current track observation and the Open-Meteo forecast tiles in Re-Live
 - weekend-level forecast summary, interpolated per session start, in the season-overview meeting dialog
 - locking around the shared season-wide master dimensions and the shared circuit dimension so concurrent weekend jobs for different meetings can no longer silently discard each other's writes; the `starting_grid` OpenF1 endpoint's permanent HTTP 404 is now treated as a legitimate empty response instead of an ingestion failure
+- past, non-cancelled sessions remain downloadable when a stale local master snapshot still labels them `scheduled`; the dashboard uses the scheduled end time as the safe availability boundary and lets the ensuing pipeline job refresh master data
 
 ### Partly implemented
 

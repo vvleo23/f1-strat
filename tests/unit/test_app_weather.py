@@ -7,6 +7,10 @@ import pandas as pd
 from f1_pipeline.dashboard.app import (
     _circular_mean_degrees,
     _interpolate_forecast,
+    _job_payload,
+    _session_downloadable,
+    _session_requires_catalog_refresh,
+    _weekend_job_payload,
     _weekend_weather_table,
 )
 
@@ -43,6 +47,89 @@ class CircularMeanDegreesTest(unittest.TestCase):
     def test_returns_endpoint_at_fraction_zero_and_one(self) -> None:
         self.assertAlmostEqual(_circular_mean_degrees(90.0, 200.0, 0.0), 90.0, places=6)
         self.assertAlmostEqual(_circular_mean_degrees(90.0, 200.0, 1.0), 200.0, places=6)
+
+
+class SessionDownloadableTest(unittest.TestCase):
+    def test_allows_past_scheduled_replacement_session(self) -> None:
+        session = pd.Series(
+            {
+                "scheduled_end_utc": "2026-10-04T09:00:00Z",
+                "status": "scheduled",
+                "is_cancelled": False,
+            }
+        )
+
+        self.assertTrue(
+            _session_downloadable(session, pd.Timestamp("2026-10-06T12:00:00Z"))
+        )
+        self.assertTrue(
+            _session_requires_catalog_refresh(
+                session, pd.Timestamp("2026-10-06T12:00:00Z")
+            )
+        )
+
+    def test_rejects_cancelled_or_future_session(self) -> None:
+        cancelled = pd.Series(
+            {
+                "scheduled_end_utc": "2026-10-04T09:00:00Z",
+                "status": "postponed",
+                "is_cancelled": True,
+            }
+        )
+        future = pd.Series(
+            {
+                "scheduled_end_utc": "2026-10-10T09:00:00Z",
+                "status": "completed",
+                "is_cancelled": False,
+            }
+        )
+        now = pd.Timestamp("2026-10-06T12:00:00Z")
+
+        self.assertFalse(_session_downloadable(cancelled, now))
+        self.assertFalse(_session_downloadable(future, now))
+
+    def test_session_job_refreshes_stale_catalog_status(self) -> None:
+        session = pd.Series(
+            {
+                "session_id": "openf1:session:11731",
+                "meeting_id": "openf1:meeting:1308",
+                "scheduled_end_utc": "2026-10-04T09:00:00Z",
+                "status": "scheduled",
+                "is_cancelled": False,
+            }
+        )
+
+        payload = _job_payload(
+            2026,
+            session,
+            purpose="weekend",
+            refresh=False,
+        )
+
+        self.assertTrue(payload["refresh"])
+
+    def test_weekend_job_refreshes_stale_catalog_status(self) -> None:
+        meeting = pd.Series(
+            {
+                "meeting_id": "openf1:meeting:1308",
+                "planned_end_utc": "2000-10-04T09:00:00Z",
+            }
+        )
+        sessions = pd.DataFrame(
+            [
+                {
+                    "session_id": "openf1:session:11731",
+                    "session_name": "Race",
+                    "scheduled_end_utc": "2000-10-04T09:00:00Z",
+                    "status": "scheduled",
+                    "is_cancelled": False,
+                }
+            ]
+        )
+
+        payload = _weekend_job_payload(2026, meeting, sessions)
+
+        self.assertTrue(payload["refresh"])
 
 
 class InterpolateForecastTest(unittest.TestCase):

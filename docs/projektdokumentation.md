@@ -396,6 +396,12 @@ Auch die Messdefinition ist nicht vollständig symmetrisch. Open-Meteo definiert
 
 Die Untersuchung ist ein explorativer Machbarkeitsnachweis und keine Forecast-Kalibrierung. Die Modellläufe wurden als feste historische Single Runs nachträglich abgerufen; ihr `available_at` beruht auf der dokumentierten konservativen Sechs-Stunden-Regel und nicht auf einem damals durch das Projekt beobachteten Abruf. Für eine produktive Korrektur wären mehrere tatsächlich point-in-time erfasste Forecast-Jahrgänge und ein Walk-forward-Test gegen die unkorrigierte Prognose erforderlich.
 
+### Veralteter Sessionstatus nach einer Verschiebung
+
+Das auf den 2. bis 4. Oktober 2026 verschobene Bahrain-Wochenende war im lokalen Saisonkatalog bereits mit den neuen Sessions `11727` bis `11731` enthalten. Der Katalog war jedoch am 3. September erzeugt worden und führte diese Sessions deshalb weiterhin als `scheduled`. Die Dashboard-Freigabe verlangte gleichzeitig `status == completed`, sodass der Wochenend-Job nach Rennende nicht gestartet werden konnte und seine eigenen Stammdaten nicht aktualisieren konnte.
+
+Die Freigabe verwendet nun die stabile Kombination aus `scheduled_end_utc <= now` und `is_cancelled == false`; explizit als `cancelled` oder `postponed` markierte Sessions bleiben gesperrt. Der folgende Pipelinejob baut die Stammdaten mit aktueller Abrufzeit neu auf. Ein Regressionstest deckt sowohl die vergangene, lokal noch als `scheduled` markierte Ersatzsession als auch abgesagte und zukünftige Sessions ab.
+
 ### Gleichzeitige Wochenend-Ladejobs
 
 Ein Hinweis aus dem Team beschrieb, dass sich beim gleichzeitigen Laden mehrerer Rennwochenenden Jobs gegenseitig zu blockieren oder zu beenden scheinen und nicht jede Session vollständig lädt. Eine Codeprüfung der Job-Orchestrierung (`job_runner.py`, `job_service.py`, `weekend_weather_pipeline.py`, `master_data.py`) zeigte, dass die Job-Sperre pro exaktem Auftrag (Saison, Meeting, Zweck, Ziel-Session, `decision_time`) vergeben wird; zwei Aufträge für unterschiedliche Meetings erhalten deshalb unterschiedliche Sperrdateien und laufen vollständig parallel, obwohl beide dieselben saisonweiten Dimensionen (`meeting`, `session`, `driver`, `team`, `circuit`) sowie die geteilte Circuit-Tabelle lesen und schreiben. Anders als die bereits gesperrte Geometrie-Dimension (`geometry.py::write_geometry_record`) sind diese Schreibpfade ungesichert.

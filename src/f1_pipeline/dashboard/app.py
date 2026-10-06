@@ -318,6 +318,34 @@ def _decision_time(session: pd.Series) -> str:
     return value.isoformat()
 
 
+def _session_downloadable(
+    session: pd.Series,
+    now: pd.Timestamp | None = None,
+) -> bool:
+    end = pd.to_datetime(session.get("scheduled_end_utc"), utc=True, errors="coerce")
+    status = str(session.get("status", "")).casefold()
+    cancelled_value = session.get("is_cancelled", False)
+    cancelled = pd.notna(cancelled_value) and bool(cancelled_value)
+    cutoff = now if now is not None else pd.Timestamp.now(tz="UTC")
+    return bool(
+        not cancelled
+        and status not in {"cancelled", "postponed"}
+        and isinstance(end, pd.Timestamp)
+        and pd.notna(end)
+        and end <= cutoff
+    )
+
+
+def _session_requires_catalog_refresh(
+    session: pd.Series,
+    now: pd.Timestamp | None = None,
+) -> bool:
+    return bool(
+        _session_downloadable(session, now)
+        and str(session.get("status", "")).casefold() != "completed"
+    )
+
+
 def _prediction_decision_time(session: pd.Series) -> str:
     start = pd.to_datetime(session["scheduled_start_utc"], utc=True, errors="coerce")
     now = pd.Timestamp.now(tz="UTC")
@@ -334,13 +362,14 @@ def _job_payload(
         refresh: bool,
 ) -> dict[str, Any]:
     session_key = source_session_key(session["session_id"])
+    requires_catalog_refresh = _session_requires_catalog_refresh(session)
     return {
         "season": season,
         "meeting_key": source_meeting_key(session["meeting_id"]),
         "purpose": purpose,
         "target_session_key": session_key,
         "decision_time": _decision_time(session),
-        "refresh": refresh,
+        "refresh": refresh or requires_catalog_refresh,
         "session_keys": [session_key],
     }
 
@@ -385,6 +414,10 @@ def _weekend_job_payload(
         meeting["planned_end_utc"], utc=True, errors="coerce"
     )
     now = pd.Timestamp.now(tz="UTC")
+    requires_catalog_refresh = any(
+        _session_requires_catalog_refresh(session, now)
+        for _, session in sessions.iterrows()
+    )
     decision_time = (
         min(meeting_end, now)
         if isinstance(meeting_end, pd.Timestamp) and pd.notna(meeting_end)
@@ -396,7 +429,7 @@ def _weekend_job_payload(
         "purpose": "weekend_complete_v1",
         "target_session_key": source_session_key(target["session_id"]),
         "decision_time": decision_time.isoformat(),
-        "refresh": False,
+        "refresh": requires_catalog_refresh,
         "session_keys": [],
     }
 
@@ -737,13 +770,9 @@ def _meeting_dialog(
     except TrackGeometryError:
         geometry = None
     now = pd.Timestamp.now(tz="UTC")
-    session_ends = pd.to_datetime(
-        sessions["scheduled_end_utc"], utc=True, errors="coerce"
-    )
-    load_available = bool(
-        sessions["status"].astype(str).str.casefold().eq("completed")
-        .where(session_ends.le(now), False)
-        .any()
+    load_available = any(
+        _session_downloadable(session, now)
+        for _, session in sessions.iterrows()
     )
     race_meeting_ids = set(
         catalog.sessions[
@@ -883,7 +912,7 @@ def _meeting_dialog(
             "Load all weekend data",
             type="primary",
             disabled=not load_available,
-            use_container_width=True,
+            width="stretch",
             help=(
                 None
                 if load_available
@@ -894,14 +923,14 @@ def _meeting_dialog(
             _submit(_weekend_job_payload(season, meeting, sessions), target_key)
         if actions[1].button(
             "Refresh status",
-            use_container_width=True,
+            width="stretch",
             key=f"refresh_weekend_{meeting_key}",
         ):
             st.cache_data.clear()
             st.rerun()
         if actions[2].button(
             "Close",
-            use_container_width=True,
+            width="stretch",
             key=f"close_weekend_{meeting_key}",
         ):
             st.session_state.pop("active_meeting_dialog", None)
@@ -945,13 +974,7 @@ def _session_dialog(
     scheduled_start = pd.to_datetime(
         session["scheduled_start_utc"], utc=True, errors="coerce"
     )
-    available = (
-        str(session["status"]).casefold() == "completed"
-        and isinstance(scheduled_start, pd.Timestamp)
-        and pd.notna(scheduled_start)
-        and scheduled_start <= pd.Timestamp.now(tz="UTC")
-        and not bool(session["is_cancelled"])
-    )
+    available = _session_downloadable(session)
 
     def dismiss() -> None:
         st.session_state.pop("active_session_dialog", None)
@@ -1202,7 +1225,7 @@ def _calendar(
                         str(meeting.meeting_name),
                         key=f"meeting_dialog_{meeting_key}",
                         type="tertiary",
-                        use_container_width=True,
+                        width="stretch",
                         help="Open weekend details",
                     ):
                         st.session_state["active_meeting_dialog"] = meeting_key
@@ -1218,22 +1241,14 @@ def _calendar(
                     for _, session in sessions.iterrows():
                         session_key = source_session_key(session["session_id"])
                         state = states[session_key]
-                        end_time = pd.to_datetime(
-                            session["scheduled_end_utc"], utc=True, errors="coerce"
-                        )
-                        downloadable = (
-                            str(session["status"]).casefold() == "completed"
-                            and isinstance(end_time, pd.Timestamp)
-                            and pd.notna(end_time)
-                            and end_time <= pd.Timestamp.now(tz="UTC")
-                        )
+                        downloadable = _session_downloadable(session)
                         marker = "✓" if state.loaded else ("○" if downloadable else "—")
                         style = "loaded" if state.loaded else "missing"
                         if st.button(
                             f"{marker}  {_session_label(session)}",
                             key=f"{style}_session_{session_key}",
                             disabled=not downloadable,
-                            use_container_width=True,
+                            width="stretch",
                         ):
                             st.session_state["active_session_dialog"] = session_key
                             st.session_state.pop("active_meeting_dialog", None)
@@ -1843,7 +1858,7 @@ def _dashboard(seasons: tuple[int, ...]) -> None:
         [1, 1.2, 7.8], gap="small", vertical_alignment="bottom"
     )
     season = int(season_column.selectbox("Season", seasons))
-    if refresh_column.button("Refresh status", use_container_width=True):
+    if refresh_column.button("Refresh status", width="stretch"):
         st.cache_data.clear()
         st.rerun()
     try:
