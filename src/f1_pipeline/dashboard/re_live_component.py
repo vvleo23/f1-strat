@@ -240,7 +240,15 @@ export default function(component) {
     query('.track-shadow').setAttribute('points', pointText)
     query('.track-line').setAttribute('points', pointText)
     const start = pointAtProgress(selected.points, 0)
-    query('.start-line').innerHTML = `<line x1="${start[0] - .06}" y1="${start[1]}" x2="${start[0] + .06}" y2="${start[1]}" stroke="#f4f7fb" stroke-width=".018" />`
+    const step = 1 / Math.max(1, selected.points.length - 1)
+    const before = pointAtProgress(selected.points, 1 - step)
+    const after = pointAtProgress(selected.points, step)
+    const tangentX = after[0] - before[0]
+    const tangentY = after[1] - before[1]
+    const tangentLength = Math.hypot(tangentX, tangentY)
+    const normalX = tangentLength > 0 ? -tangentY / tangentLength : 0
+    const normalY = tangentLength > 0 ? tangentX / tangentLength : 1
+    query('.start-line').innerHTML = `<line x1="${start[0] - normalX * .06}" y1="${start[1] - normalY * .06}" x2="${start[0] + normalX * .06}" y2="${start[1] + normalY * .06}" stroke="#f4f7fb" stroke-width=".018" />`
     query('.geometry-label').textContent = selected.label || ''
   }
 
