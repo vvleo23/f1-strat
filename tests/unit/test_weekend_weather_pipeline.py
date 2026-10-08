@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -220,17 +222,18 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             available_at = pd.Timestamp("2026-07-26T06:00:00Z")
             decision_time = pd.Timestamp("2026-07-26T12:00:00Z")
 
-            frame = normalize_forecast(
-                payload,
-                snapshot_id="open_meteo:test",
+            arguments = dict(
                 session_id="openf1:session:11342",
                 circuit_id="openf1:circuit:4",
                 reference=reference,
                 run_initialized_at=run_time,
-                available_at=available_at,
                 retrieved_at=pd.Timestamp("2026-08-25T00:00:00Z"),
                 decision_time=decision_time,
                 raw_path=raw_path,
+            )
+            frame = normalize_forecast(
+                payload, **arguments, snapshot_id="open_meteo:test",
+                available_at=available_at,
             )
 
             self.assertTrue(pd.isna(frame.iloc[0]["precipitation"]))
@@ -241,16 +244,8 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             )
             with self.assertRaises(OpenMeteoError):
                 normalize_forecast(
-                    payload,
-                    snapshot_id="open_meteo:test-late",
-                    session_id="openf1:session:11342",
-                    circuit_id="openf1:circuit:4",
-                    reference=reference,
-                    run_initialized_at=run_time,
+                    payload, **arguments, snapshot_id="open_meteo:test-late",
                     available_at=pd.Timestamp("2026-07-26T13:00:00Z"),
-                    retrieved_at=pd.Timestamp("2026-08-25T00:00:00Z"),
-                    decision_time=decision_time,
-                    raw_path=raw_path,
                 )
 
     def test_purpose_planning_selects_historical_inputs_for_consumer_side_cut(self) -> None:
@@ -506,7 +501,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                 atomic_json(result, path)
                 return result, path
 
-            first, first_path = run_weekend_weather_pipeline(
+            arguments = dict(
                 meeting_key=1291,
                 decision_time="2026-07-26T16:00:00Z",
                 purpose="weekend_complete_v1",
@@ -515,30 +510,19 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
                 reference_loader=reference_loader,
                 forecast_loader=forecast_loader,
                 weekend_loader=weekend_loader,
+            )
+            first, first_path = run_weekend_weather_pipeline(
+                **arguments,
                 session_keys=[11342, 11338, 11342],
                 session_types=["race", "qualifying"],
             )
             second, second_path = run_weekend_weather_pipeline(
-                meeting_key=1291,
-                decision_time="2026-07-26T16:00:00Z",
-                purpose="weekend_complete_v1",
-                output_dir=root / "curated",
-                master_loader=master_loader,
-                reference_loader=reference_loader,
-                forecast_loader=forecast_loader,
-                weekend_loader=weekend_loader,
+                **arguments,
                 session_keys=[11338, 11342],
                 session_types=["qualifying", "race"],
             )
             race_only, race_only_path = run_weekend_weather_pipeline(
-                meeting_key=1291,
-                decision_time="2026-07-26T16:00:00Z",
-                purpose="weekend_complete_v1",
-                output_dir=root / "curated",
-                master_loader=master_loader,
-                reference_loader=reference_loader,
-                forecast_loader=forecast_loader,
-                weekend_loader=weekend_loader,
+                **arguments,
                 session_keys=[11342],
             )
 
@@ -581,16 +565,6 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             )
 
     def test_concurrent_circuit_enrichment_does_not_lose_either_update(self) -> None:
-        # Regression test for the reported "a new job silently undoes an
-        # older one" behaviour: two weekend jobs enriching DIFFERENT
-        # circuits in the shared season-wide circuit.parquet used to be able
-        # to race, with whichever job wrote last discarding the other job's
-        # enrichment (reproduced before the fix by forcing both threads to
-        # read before either wrote). `file_lock` inside `_enrich_circuit`
-        # now makes that interleaving impossible: the second thread cannot
-        # even start reading until the first has fully written and released
-        # the lock, so running the two updates genuinely concurrently and
-        # asserting neither is lost is itself the regression proof.
         with tempfile.TemporaryDirectory() as temporary:
             circuit_path = Path(temporary) / "circuit.parquet"
             pd.DataFrame(
@@ -633,10 +607,42 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
 
             first = threading.Thread(target=run, args=(reference(7, "Q172851"),))
             second = threading.Thread(target=run, args=(reference(55, "Q173083"),))
-            first.start()
-            second.start()
-            first.join()
-            second.join()
+            write_started = threading.Event()
+            contended = threading.Event()
+            original_open = os.open
+
+            def observed_open(*args, **kwargs):
+                try:
+                    return original_open(*args, **kwargs)
+                except FileExistsError:
+                    contended.set()
+                    raise
+
+            def synchronized_write(frame, path):
+                if threading.current_thread() is first:
+                    write_started.set()
+                    if not contended.wait(3.0):
+                        raise TimeoutError("Second enrichment did not contend for the lock")
+                atomic_parquet(frame, path)
+
+            with (
+                patch("f1_pipeline.persistence.os.open", side_effect=observed_open),
+                patch(
+                    "f1_pipeline.sources.weekend_weather_pipeline.atomic_parquet",
+                    side_effect=synchronized_write,
+                ),
+            ):
+                first.start()
+                try:
+                    self.assertTrue(write_started.wait(2.0))
+                    second.start()
+                finally:
+                    first.join(5.0)
+                    if second.ident is not None:
+                        second.join(5.0)
+
+            self.assertTrue(contended.is_set())
+            self.assertFalse(first.is_alive() or second.is_alive())
 
             self.assertEqual(errors, [])
             result = pd.read_parquet(circuit_path)

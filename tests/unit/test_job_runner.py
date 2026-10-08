@@ -9,6 +9,7 @@ from f1_pipeline.job_runner import (
     JobRunnerError,
     WeekendJobIntent,
     job_id,
+    read_job_status,
     run_weekend_job,
 )
 
@@ -67,71 +68,41 @@ class JobRunnerTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "unavailable")
             self.assertEqual(result["error"], "provider failed")
+            self.assertEqual(read_job_status(result["job_id"], Path(temporary)), result)
 
-    def test_qualifying_job_runs_calculation_and_persists_reference(self) -> None:
-        intent = WeekendJobIntent(
-            season=2026,
-            meeting_key=1291,
-            purpose="qualifying_prediction",
-            target_session_key=11338,
-            decision_time="2026-07-25T14:00:00Z",
-        )
-        calls: list[tuple[dict[str, object], Path]] = []
+    def test_calculation_jobs_persist_reference_and_inputs(self) -> None:
+        for purpose, session, focus, identifier_key in (
+            ("qualifying_prediction", 11338, None, "calculation_id"),
+            ("race_strategy", 11342, 4, "strategy_run_id"),
+        ):
+            with self.subTest(purpose=purpose), tempfile.TemporaryDirectory() as temporary:
+                intent = WeekendJobIntent(
+                    season=2026, meeting_key=1291, purpose=purpose,
+                    target_session_key=session, focus_driver=focus,
+                    decision_time="2026-07-26T16:00:00Z",
+                )
+                manifest = {"status": "partial", "run_id": "run-2"}
+                calls = []
 
-        def pipeline(**kwargs: object):
-            return {"status": "partial", "run_id": "run-2"}, Path("pipeline.json")
+                def pipeline(**kwargs: object):
+                    return manifest, Path("pipeline.json")
 
-        def calculation(manifest: dict[str, object], path: Path):
-            calls.append((manifest, path))
-            return (
-                {"status": "available", "calculation_id": "calculation-1"},
-                Path("calculation.json"),
-            )
+                def calculation(inputs, path, *, focus_driver=None):
+                    calls.append((inputs, path, focus_driver))
+                    return (
+                        {"status": "available", identifier_key: "calculation-1"},
+                        Path("calculation.json"),
+                    )
 
-        with tempfile.TemporaryDirectory() as temporary:
-            result = run_weekend_job(
-                intent,
-                job_dir=Path(temporary),
-                pipeline_runner=pipeline,
-                calculation_runner=calculation,
-            )
-
-        self.assertEqual(result["status"], "available")
-        self.assertEqual(result["calculation_id"], "calculation-1")
-        self.assertEqual(result["calculation_manifest_path"], "calculation.json")
-        self.assertEqual(len(calls), 1)
-
-    def test_strategy_job_passes_focus_driver_to_calculation(self) -> None:
-        intent = WeekendJobIntent(
-            season=2026,
-            meeting_key=1291,
-            purpose="race_strategy",
-            target_session_key=11342,
-            decision_time="2026-07-26T16:00:00Z",
-            focus_driver=4,
-        )
-        calls: list[int] = []
-
-        def pipeline(**kwargs: object):
-            return {"status": "available", "run_id": "run-3"}, Path("pipeline.json")
-
-        def strategy(manifest: dict[str, object], path: Path, *, focus_driver: int):
-            calls.append(focus_driver)
-            return (
-                {"status": "available", "strategy_run_id": "strategy-1"},
-                Path("strategy.json"),
-            )
-
-        with tempfile.TemporaryDirectory() as temporary:
-            result = run_weekend_job(
-                intent,
-                job_dir=Path(temporary),
-                pipeline_runner=pipeline,
-                strategy_runner=strategy,
-            )
-
-        self.assertEqual(result["calculation_id"], "strategy-1")
-        self.assertEqual(calls, [4])
+                result = run_weekend_job(
+                    intent, job_dir=Path(temporary), pipeline_runner=pipeline,
+                    calculation_runner=calculation, strategy_runner=calculation,
+                )
+                self.assertEqual(result["status"], "available")
+                self.assertEqual(result["calculation_id"], "calculation-1")
+                self.assertEqual(result["calculation_manifest_path"], "calculation.json")
+                self.assertEqual(calls, [(manifest, Path("pipeline.json"), focus)])
+                self.assertEqual(read_job_status(result["job_id"], Path(temporary)), result)
 
     def test_strategy_job_requires_focus_driver(self) -> None:
         intent = WeekendJobIntent(

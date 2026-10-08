@@ -24,6 +24,23 @@ from f1_pipeline.replay.circle_of_doom import (
 
 
 class CircleOfDoomTest(unittest.TestCase):
+    @staticmethod
+    def _lap_starts(start, samples):
+        return pd.DataFrame([
+            {"date_start": start + timedelta(seconds=seconds),
+             "driver_number": 1, "lap_number": lap}
+            for seconds, lap in samples
+        ])
+
+    @staticmethod
+    def _replay(datasets, **overrides):
+        options = dict(
+            focus_driver=2, green_pit_loss=20.0, neutralized_pit_loss=12.0,
+            frame_seconds=10, max_staleness_seconds=5,
+        )
+        options.update(overrides)
+        return build_replay(datasets, **options)
+
     def test_pit_projection_excludes_inactive_drivers(self) -> None:
         def car(
                 driver: int,
@@ -199,21 +216,7 @@ class CircleOfDoomTest(unittest.TestCase):
 
     def test_location_progress_uses_geometric_distance(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
-        laps = pd.DataFrame(
-            [
-                {"date_start": start, "driver_number": 1, "lap_number": 1},
-                {
-                    "date_start": start + timedelta(seconds=10),
-                    "driver_number": 1,
-                    "lap_number": 2,
-                },
-                {
-                    "date_start": start + timedelta(seconds=20),
-                    "driver_number": 1,
-                    "lap_number": 3,
-                },
-            ]
-        )
+        laps = self._lap_starts(start, [(0, 1), (10, 2), (20, 3)])
         location = pd.DataFrame(
             [
                 {"date": start, "driver_number": 1, "x": 0, "y": 0, "z": 0},
@@ -256,26 +259,7 @@ class CircleOfDoomTest(unittest.TestCase):
 
     def test_location_progress_keeps_moving_across_missing_lap_number(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-08-23T13:00:00Z"))
-        laps = pd.DataFrame(
-            [
-                {"date_start": start, "driver_number": 1, "lap_number": 1},
-                {
-                    "date_start": start + timedelta(seconds=4),
-                    "driver_number": 1,
-                    "lap_number": 2,
-                },
-                {
-                    "date_start": start + timedelta(seconds=12),
-                    "driver_number": 1,
-                    "lap_number": 4,
-                },
-                {
-                    "date_start": start + timedelta(seconds=16),
-                    "driver_number": 1,
-                    "lap_number": 5,
-                },
-            ]
-        )
+        laps = self._lap_starts(start, [(0, 1), (4, 2), (12, 4), (16, 5)])
         coordinates = [0, 1, 2, 1, 0, 1, 2, 1, 0, 1, 2, 1, 0, 1, 2, 1, 0]
         location = pd.DataFrame(
             [
@@ -299,21 +283,7 @@ class CircleOfDoomTest(unittest.TestCase):
 
     def test_location_progress_does_not_treat_start_acceleration_as_outlier(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
-        laps = pd.DataFrame(
-            [
-                {"date_start": start, "driver_number": 1, "lap_number": 1},
-                {
-                    "date_start": start + timedelta(seconds=4),
-                    "driver_number": 1,
-                    "lap_number": 2,
-                },
-                {
-                    "date_start": start + timedelta(seconds=8),
-                    "driver_number": 1,
-                    "lap_number": 3,
-                },
-            ]
-        )
+        laps = self._lap_starts(start, [(0, 1), (4, 2), (8, 3)])
         coordinates = [0, 0.01, 1.01, 2.01, 3.01, 4.01, 5.01, 6.01, 7.01]
         location = pd.DataFrame(
             [
@@ -342,26 +312,7 @@ class CircleOfDoomTest(unittest.TestCase):
 
     def test_location_progress_merges_spurious_intermediate_lap_start(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-08-23T13:00:00Z"))
-        laps = pd.DataFrame(
-            [
-                {"date_start": start, "driver_number": 1, "lap_number": 1},
-                {
-                    "date_start": start + timedelta(seconds=6),
-                    "driver_number": 1,
-                    "lap_number": 2,
-                },
-                {
-                    "date_start": start + timedelta(seconds=9),
-                    "driver_number": 1,
-                    "lap_number": 3,
-                },
-                {
-                    "date_start": start + timedelta(seconds=12),
-                    "driver_number": 1,
-                    "lap_number": 4,
-                },
-            ]
-        )
+        laps = self._lap_starts(start, [(0, 1), (6, 2), (9, 3), (12, 4)])
         location = pd.DataFrame(
             [
                 {
@@ -387,16 +338,7 @@ class CircleOfDoomTest(unittest.TestCase):
 
     def test_location_progress_is_stable_when_future_samples_are_appended(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
-        laps = pd.DataFrame(
-            [
-                {"date_start": start, "driver_number": 1, "lap_number": 1},
-                {
-                    "date_start": start + timedelta(seconds=10),
-                    "driver_number": 1,
-                    "lap_number": 2,
-                },
-            ]
-        )
+        laps = self._lap_starts(start, [(0, 1), (10, 2)])
         prefix = pd.DataFrame(
             [
                 {"date": start, "driver_number": 1, "x": 0, "y": 0, "z": 0},
@@ -506,14 +448,7 @@ class CircleOfDoomTest(unittest.TestCase):
         finish = cast(pd.Timestamp, start + timedelta(seconds=120))
         datasets = self._datasets(start, finish)
 
-        replay = build_replay(
-            datasets,
-            focus_driver=2,
-            green_pit_loss=20.0,
-            neutralized_pit_loss=12.0,
-            frame_seconds=10,
-            max_staleness_seconds=5,
-        )
+        replay = self._replay(datasets)
 
         self.assertEqual(len(replay.frames), 13)
         middle = replay.frames[1]
@@ -534,14 +469,7 @@ class CircleOfDoomTest(unittest.TestCase):
             columns=["date", "driver_number", "gap_to_leader", "interval"]
         )
 
-        replay = build_replay(
-            datasets,
-            focus_driver=2,
-            green_pit_loss=20.0,
-            neutralized_pit_loss=12.0,
-            frame_seconds=10,
-            max_staleness_seconds=5,
-        )
+        replay = self._replay(datasets)
 
         final = replay.frames[-1]
         self.assertEqual({car.driver_number for car in final.cars}, {1, 2, 3})
@@ -556,13 +484,9 @@ class CircleOfDoomTest(unittest.TestCase):
         finish = cast(pd.Timestamp, start + timedelta(seconds=120))
         datasets = self._datasets(start, finish)
 
-        replay = build_replay(
+        replay = self._replay(
             datasets,
-            focus_driver=2,
-            green_pit_loss=20.0,
             neutralized_pit_loss=None,
-            frame_seconds=10,
-            max_staleness_seconds=5,
         )
 
         neutralized = next(frame for frame in replay.frames if frame.status == "SC")
@@ -573,15 +497,11 @@ class CircleOfDoomTest(unittest.TestCase):
         finish = cast(pd.Timestamp, start + timedelta(seconds=120))
         datasets = self._datasets(start, finish)
 
-        replay = build_replay(
+        replay = self._replay(
             datasets,
-            focus_driver=2,
-            green_pit_loss=20.0,
             neutralized_pit_loss=None,
             sc_pit_loss=9.0,
             vsc_pit_loss=11.0,
-            frame_seconds=10,
-            max_staleness_seconds=5,
         )
 
         neutralized = next(
@@ -596,12 +516,8 @@ class CircleOfDoomTest(unittest.TestCase):
         finish = cast(pd.Timestamp, start + timedelta(seconds=120))
         decision_time = cast(pd.Timestamp, start + timedelta(seconds=70))
         datasets = self._datasets(start, finish)
-        baseline = build_replay(
+        baseline = self._replay(
             datasets,
-            focus_driver=2,
-            green_pit_loss=20.0,
-            neutralized_pit_loss=12.0,
-            frame_seconds=10,
             max_staleness_seconds=15,
             decision_time=decision_time,
         )
@@ -642,12 +558,8 @@ class CircleOfDoomTest(unittest.TestCase):
         )
         expanded["stints"].loc[:, "available_at"] = finish + timedelta(seconds=30)
 
-        replay = build_replay(
+        replay = self._replay(
             expanded,
-            focus_driver=2,
-            green_pit_loss=20.0,
-            neutralized_pit_loss=12.0,
-            frame_seconds=10,
             max_staleness_seconds=15,
             decision_time=decision_time,
         )
