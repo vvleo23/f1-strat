@@ -24,7 +24,6 @@ from f1_pipeline.replay.circle_of_doom import (
 )
 
 REPLAY_REQUIRED_ENDPOINTS = (
-    "sessions",
     "drivers",
     "laps",
     "position",

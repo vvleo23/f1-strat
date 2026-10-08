@@ -39,42 +39,41 @@ ENDPOINTS = (
     "championship_drivers",
     "championship_teams",
 )
-REQUIRED_BY_SESSION_TYPE = {
+CORE_BY_SESSION_TYPE = {
     "practice": frozenset({"drivers", "laps", "stints", "weather"}),
-    "qualifying": frozenset({"drivers", "laps", "position", "stints", "weather"}),
-    "sprint_qualifying": frozenset({"drivers", "laps", "position", "stints", "weather"}),
+    "qualifying": frozenset(
+        {"drivers", "laps", "stints", "weather", "session_result"}
+    ),
+    "sprint_qualifying": frozenset(
+        {"drivers", "laps", "stints", "weather", "session_result"}
+    ),
     "sprint": frozenset(
-        {"drivers", "laps", "intervals", "position", "stints", "race_control", "weather"}
+        {"drivers", "laps", "stints", "weather", "session_result"}
     ),
     "race": frozenset(
         {
             "drivers",
             "laps",
-            "intervals",
-            "position",
-            "pit",
             "stints",
-            "race_control",
             "weather",
+            "session_result",
         }
     ),
 }
-OPTIONAL_BY_SESSION_TYPE = {
-    "practice": frozenset({"position", "pit", "race_control"}),
-    "qualifying": frozenset({"pit", "race_control", "session_result"}),
-    "sprint_qualifying": frozenset({"pit", "race_control", "session_result"}),
-    "sprint": frozenset(
-        {"pit", "session_result", "championship_drivers", "championship_teams"}
-    ),
+CORE_OPTIONAL_BY_SESSION_TYPE = {
+    "practice": frozenset(),
+    "qualifying": frozenset(),
+    "sprint_qualifying": frozenset(),
+    "sprint": frozenset({"championship_drivers", "championship_teams"}),
     "race": frozenset(
         {
-            "starting_grid",
-            "session_result",
             "championship_drivers",
             "championship_teams",
         }
     ),
 }
+REPLAY_REQUIRED = frozenset({"position", "location"})
+REPLAY_OPTIONAL = frozenset({"intervals", "pit", "race_control"})
 ALLOW_EMPTY = frozenset({"intervals", "pit", "race_control", "starting_grid"})
 # OpenF1 returns HTTP 404 (not an empty JSON array) for these endpoints when
 # there is nothing to report, mirroring the already-documented `intervals`
@@ -284,14 +283,20 @@ def plan_weekend_sessions(
         normalized_type = normalize_session_type(
             str(session.get("session_type", "")), str(session.get("session_name", ""))
         )
-        required = REQUIRED_BY_SESSION_TYPE[normalized_type]
-        optional = OPTIONAL_BY_SESSION_TYPE[normalized_type]
+        required = CORE_BY_SESSION_TYPE[normalized_type]
+        optional = CORE_OPTIONAL_BY_SESSION_TYPE[normalized_type]
         if purpose == "replay":
-            required = required | {"sessions", "location"}
+            required = required | REPLAY_REQUIRED
+            optional = optional | REPLAY_OPTIONAL
         elif purpose == "weekend_complete_v1":
-            required = required | {"sessions"}
             if normalized_type in {"sprint", "race"}:
-                required = required | {"location"}
+                required = required | REPLAY_REQUIRED
+                optional = optional | REPLAY_OPTIONAL
+            if normalized_type == "race":
+                optional = optional | {"starting_grid"}
+        elif purpose == "race_strategy" and normalized_type in {"sprint", "race"}:
+            required = required | REPLAY_REQUIRED
+            optional = optional | REPLAY_OPTIONAL
         skipped = frozenset(ENDPOINTS).difference(required | optional)
         plans.append(
             {

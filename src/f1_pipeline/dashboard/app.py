@@ -273,7 +273,7 @@ def _inject_styles() -> None:
 def _job_copy(payload: dict[str, Any]) -> tuple[str, str]:
     purpose = str(payload.get("purpose", "")).casefold()
     if purpose == "weekend_complete_v1":
-        return "Downloading weekend data", "Weekend data"
+        return "Downloading complete weekend data", "Complete weekend data"
     if purpose == "replay":
         return "Downloading Re-Live data", "Re-Live data"
     if purpose == "qualifying_prediction":
@@ -1018,12 +1018,12 @@ def _meeting_dialog(
                 )
 
         st.caption(
-            "Download buttons submit a background job. Local status buttons only reread saved data."
+            "The complete download loads every finished session and adds replay timelines for Sprint and Race."
         )
         job_active = _job_active(target_key)
         actions = st.columns([1.6, 1, 1])
         if actions[0].button(
-            "Download weekend data",
+            "Download complete weekend data",
             type="primary",
             icon=":material/download:",
             disabled=not load_available or job_active,
@@ -1140,7 +1140,7 @@ def _session_dialog(
         if not driver_options:
             st.caption("Download session data before selecting a Re-Live driver.")
         st.caption(
-            "Download and calculate buttons submit a background job. Open buttons use local data immediately."
+            "Session download loads the Core dataset. Re-Live adds position and location timelines."
         )
         job_active = _job_active(session_key)
         columns = st.columns(3 if feature_label else 2)

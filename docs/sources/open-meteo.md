@@ -1,6 +1,6 @@
 # Open-Meteo
 
-**Status:** Historical ECMWF IFS Single-Run selection and Hungary 2026 persistence implemented; scheduled future capture remains planned.
+**Status:** Historical ECMWF IFS Single-Run selection, Hungary 2026 persistence, and scheduled `T-24 h`/`T-6 h`/`T-1 h` capture are implemented.
 
 [Open-Meteo](https://open-meteo.com/) provides global numerical weather-model data through consistent HTTP APIs. This project uses it for immutable point-in-time forecasts. OpenF1 and FastF1 weather remain separate session observations and evaluation references.
 

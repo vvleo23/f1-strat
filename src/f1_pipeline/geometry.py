@@ -729,7 +729,7 @@ def build_manifest_geometry(
     if not isinstance(endpoints, dict):
         raise TrackGeometryError("Session manifest endpoints are invalid.")
     inputs: dict[str, dict[str, Any]] = {}
-    for name in ("sessions", "laps", "location"):
+    for name in ("laps", "location"):
         endpoint = endpoints.get(name)
         if not isinstance(endpoint, dict) or endpoint.get("status") not in {
             "available",

@@ -1,6 +1,6 @@
 # OpenF1
 
-**Status:** Season-parameterized discovery, purpose-based planning, Weekend Complete V1, results, standings, and automatic local geometry are implemented; delayed scheduling and finalization remain planned.
+**Status:** Season-parameterized discovery, Core session ingestion, replay/full extensions, results, standings, automatic local geometry, and bounded post-session scheduling are implemented.
 
 [OpenF1](https://openf1.org/) is the primary event-oriented source. Its HTTP API provides structured historical Formula 1 data with absolute timestamps and stable session keys.
 
@@ -20,7 +20,7 @@
 
 OpenF1 is the primary source for meeting/session discovery and the replay timeline. One shared transport and Bronze path convention serve master data, weekend ingestion, replay, and verification. The pipeline discovers every advertised session, including sprint formats, before selecting sessions by purpose and `decision_time` and then selecting endpoints by session type. FastF1 overlap is retained only as a separate cross-check.
 
-The `weekend` profile loads drivers, laps, stints, weather, and the applicable position, pit, interval, Race Control, starting-grid, result, and championship data. The OpenF1 `intervals` endpoint is not requested for practice and qualifying. `starting_grid` is optional for races and is never inferred from the first position event. `weekend_complete_v1` additionally persists session responses for all selected sessions and high-volume `location` for sprint and race. When one session manifest contains usable `sessions`, `laps`, and `location` snapshots, the orchestrator hash-checks those exact immutable inputs and builds a local centerline automatically.
+The `weekend` Core profile loads drivers, laps, stints, weather, and results where applicable. Sprint and Race also attempt championship standings. `replay` adds position, interval, pit, Race Control, and high-volume `location`; `weekend_complete_v1` applies that extension to Sprint and Race and attempts the official race grid. When one session manifest contains usable lap and location snapshots, the orchestrator hash-checks those exact immutable inputs and builds a local centerline automatically.
 
 OpenF1 `circuit_key` is the stable join to a reviewed or uniquely auto-verified Wikidata identity. OpenF1 provides the source identity but not the WGS84 weather-reference coordinate.
 
@@ -32,7 +32,7 @@ OpenF1 `circuit_key` is the stable join to a reviewed or uniquely auto-verified 
 - Bounded timeouts, retries with backoff, and at most 30 community requests per minute
 - Immutable content-addressed Raw Parquet snapshots plus compatible latest paths under `data/raw/`
 
-Historical jobs therefore avoid relying on anonymous access during live windows. If access is rejected, independent sources continue and an existing valid snapshot may be exposed as `stale`; without one, the OpenF1 result remains `unavailable`. The client does not poll until access returns. Authentication and live access are outside Pipeline and Dashboard V1.
+Historical jobs therefore avoid relying on anonymous access during live windows. Scheduled Core ingestion runs at `T+1 h` and retries incomplete sessions at `T+5 h`. Existing valid endpoint snapshots are reused during the retry. Authentication and live access are outside Pipeline and Dashboard V1.
 
 ## Verification
 

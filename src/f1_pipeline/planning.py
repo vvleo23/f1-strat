@@ -9,6 +9,7 @@ from f1_pipeline.sources.open_meteo import utc_timestamp
 from f1_pipeline.sources.openf1_weekend import OpenF1WeekendError, normalize_session_type
 
 PURPOSES = (
+    "forecast",
     "weekend",
     "weekend_complete_v1",
     "replay",
@@ -63,7 +64,7 @@ def plan_sessions_for_purpose(
     def completed_by_cut(session: dict[str, Any]) -> bool:
         end = _timestamp(session, "scheduled_end_utc")
         return (
-            str(session.get("status", "")).casefold() == "completed"
+            str(session.get("status", "")).casefold() not in {"cancelled", "postponed"}
             and end is not None
             and end <= cut_time
         )
@@ -130,7 +131,9 @@ def plan_sessions_for_purpose(
             "Qualifying prediction requires a Qualifying or Sprint Qualifying target."
         )
 
-    if normalized_purpose == "replay":
+    if normalized_purpose == "forecast":
+        selected = []
+    elif normalized_purpose == "replay":
         if not completed_by_cut(target):
             raise SessionPlanningError("Replay requires a completed target session.")
         selected = [target]
@@ -163,5 +166,5 @@ def plan_sessions_for_purpose(
         "decision_time": cut_time.isoformat(),
         "selected_sessions": selected,
         "target_session": target,
-        "selection_basis": "scheduled_end_and_session_status",
+        "selection_basis": "scheduled_end_and_not_cancelled",
     }

@@ -10,14 +10,21 @@ from typing import Any, Callable
 
 from f1_pipeline.analysis.qualifying_prediction import build_qualifying_prediction
 from f1_pipeline.analysis.race_strategy import build_race_strategy
-from f1_pipeline.persistence import atomic_json
+from f1_pipeline.persistence import atomic_json, file_lock
 from f1_pipeline.planning import PURPOSES
 from f1_pipeline.settings import CURATED_DATA_DIR
 from f1_pipeline.sources.weekend_weather_pipeline import run_weekend_weather_pipeline
 
 JOB_MANIFEST_DIR = CURATED_DATA_DIR / "manifests" / "jobs"
 JOB_PURPOSES = frozenset(
-    {"weekend", "weekend_complete_v1", "replay", "qualifying_prediction", "race_strategy"}
+    {
+        "forecast",
+        "weekend",
+        "weekend_complete_v1",
+        "replay",
+        "qualifying_prediction",
+        "race_strategy",
+    }
 )
 PipelineRunner = Callable[..., tuple[dict[str, Any], Path]]
 CalculationRunner = Callable[[dict[str, Any], Path], tuple[dict[str, Any], Path]]
@@ -54,7 +61,7 @@ class WeekendJobIntent:
         if self.meeting_key <= 0:
             raise JobRunnerError("Meeting key must be positive.")
         if (
-            purpose in {"replay", "qualifying_prediction", "race_strategy"}
+            purpose in {"forecast", "replay", "qualifying_prediction", "race_strategy"}
             and self.target_session_key is None
         ):
             raise JobRunnerError(f"{purpose} jobs require a target session key.")
@@ -131,15 +138,16 @@ def run_weekend_job(
     manifest = None
     manifest_path = None
     try:
-        manifest, manifest_path = pipeline_runner(
-            season=normalized.season,
-            meeting_key=normalized.meeting_key,
-            purpose=normalized.purpose,
-            target_session_key=normalized.target_session_key,
-            decision_time=normalized.decision_time,
-            refresh=normalized.refresh,
-            session_keys=normalized.session_keys or None,
-        )
+        with file_lock(job_dir / "source_pipeline", timeout_seconds=900.0):
+            manifest, manifest_path = pipeline_runner(
+                season=normalized.season,
+                meeting_key=normalized.meeting_key,
+                purpose=normalized.purpose,
+                target_session_key=normalized.target_session_key,
+                decision_time=normalized.decision_time,
+                refresh=normalized.refresh,
+                session_keys=normalized.session_keys or None,
+            )
         calculation = None
         calculation_path = None
         if normalized.purpose == "qualifying_prediction":

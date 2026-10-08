@@ -60,10 +60,11 @@ class OpenF1WeekendTest(unittest.TestCase):
         self.assertNotIn("location", plans[0]["required_endpoints"])
         self.assertIn("location", plans[0]["skipped_endpoints"])
         self.assertIn("intervals", plans[0]["skipped_endpoints"])
-        self.assertIn("session_result", plans[1]["optional_endpoints"])
-        self.assertIn("pit", plans[-1]["required_endpoints"])
-        self.assertIn("starting_grid", plans[-1]["optional_endpoints"])
-        self.assertIn("session_result", plans[-1]["optional_endpoints"])
+        self.assertIn("session_result", plans[1]["required_endpoints"])
+        self.assertNotIn("position", plans[1]["required_endpoints"])
+        self.assertNotIn("pit", plans[-1]["required_endpoints"])
+        self.assertNotIn("starting_grid", plans[-1]["optional_endpoints"])
+        self.assertIn("session_result", plans[-1]["required_endpoints"])
         self.assertIn("championship_drivers", plans[-1]["optional_endpoints"])
         self.assertIn("championship_teams", plans[-1]["optional_endpoints"])
 
@@ -79,8 +80,10 @@ class OpenF1WeekendTest(unittest.TestCase):
             ],
             purpose="replay",
         )[0]
-        self.assertIn("sessions", replay["required_endpoints"])
+        self.assertNotIn("sessions", replay["required_endpoints"])
         self.assertIn("location", replay["required_endpoints"])
+        self.assertIn("position", replay["required_endpoints"])
+        self.assertIn("pit", replay["optional_endpoints"])
         self.assertNotIn("location", replay["skipped_endpoints"])
 
         complete = plan_weekend_sessions(
@@ -102,10 +105,11 @@ class OpenF1WeekendTest(unittest.TestCase):
             ],
             purpose="weekend_complete_v1",
         )
-        self.assertIn("sessions", complete[0]["required_endpoints"])
+        self.assertNotIn("sessions", complete[0]["required_endpoints"])
         self.assertNotIn("location", complete[0]["required_endpoints"])
-        self.assertIn("sessions", complete[1]["required_endpoints"])
+        self.assertNotIn("sessions", complete[1]["required_endpoints"])
         self.assertIn("location", complete[1]["required_endpoints"])
+        self.assertIn("starting_grid", complete[1]["optional_endpoints"])
 
     def test_ingestion_persists_results_and_isolates_optional_failure(self) -> None:
         payloads = {

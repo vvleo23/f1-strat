@@ -348,6 +348,13 @@ def run_weekend_weather_pipeline(
     cut_time = utc_timestamp(decision_time, "decision_time")
     normalized_decision_time = cut_time.isoformat()
     normalized_purpose = purpose.strip().casefold()
+    include_forecast = normalized_purpose in {
+        "forecast",
+        "replay",
+        "weekend_complete_v1",
+        "qualifying_prediction",
+        "race_strategy",
+    }
     jobs: dict[str, dict[str, Any]] = {}
     context: dict[str, Any] | None = None
     reference: CircuitReference | None = None
@@ -459,7 +466,9 @@ def run_weekend_weather_pipeline(
             "session_count": context["discovered_session_count"],
         }
 
-    if context is None or not context["sessions"]:
+    if normalized_purpose != "forecast" and (
+        context is None or not context["sessions"]
+    ):
         jobs["openf1_weekend_facts"] = {
             "status": "unavailable",
             "error": (
@@ -468,7 +477,7 @@ def run_weekend_weather_pipeline(
                 else "No completed sessions are available at decision_time."
             ),
         }
-    else:
+    elif normalized_purpose != "forecast":
         try:
             loaded_weekend, weekend_path = load_weekend(
                 context["sessions"],
@@ -492,13 +501,20 @@ def run_weekend_weather_pipeline(
 
     geometry_results: list[dict[str, Any]] = []
     geometry_errors: list[dict[str, Any]] = []
+    geometry_expected = False
     if context is not None and weekend_result is not None:
         for session_manifest in weekend_result.get("sessions", []):
             if not isinstance(session_manifest, dict):
                 continue
             endpoints = session_manifest.get("endpoints")
+            requested = set(session_manifest.get("required_endpoints", [])) | set(
+                session_manifest.get("optional_endpoints", [])
+            )
+            geometry_expected = geometry_expected or "location" in requested
             if not isinstance(endpoints, dict) or not all(
-                    name in endpoints for name in ("sessions", "laps", "location")
+                    isinstance(endpoints.get(name), dict)
+                    and endpoints[name].get("status") in {"available", "stale"}
+                    for name in ("laps", "location")
             ):
                 continue
             try:
@@ -530,7 +546,7 @@ def run_weekend_weather_pipeline(
             "manifest_sha256": geometry_results[-1].get("manifest_sha256"),
             "curated_sha256": geometry_results[-1].get("curated_sha256"),
         }
-    else:
+    elif geometry_expected:
         jobs["track_geometry"] = {
             "status": "unavailable",
             "error": "No session produced a usable OpenF1 track geometry.",
@@ -539,12 +555,12 @@ def run_weekend_weather_pipeline(
     if "openf1" in jobs and outputs.get("manifest", Path()).is_file():
         jobs["openf1"]["manifest_sha256"] = sha256(outputs["manifest"])
 
-    if context is None:
+    if include_forecast and context is None:
         jobs["wikidata"] = {
             "status": "unavailable",
             "error": "OpenF1 circuit context is unavailable.",
         }
-    else:
+    elif include_forecast:
         try:
             if reference_loader is None:
                 loaded_reference, result = load_reference(
@@ -597,12 +613,12 @@ def run_weekend_weather_pipeline(
         except (WikidataError, WeekendWeatherPipelineError, OSError, ValueError, KeyError) as exc:
             jobs["wikidata"] = {"status": "unavailable", "error": str(exc)}
 
-    if context is None or reference is None:
+    if include_forecast and (context is None or reference is None):
         jobs["open_meteo"] = {
             "status": "unavailable",
             "error": "A verified circuit reference is unavailable.",
         }
-    else:
+    elif include_forecast:
         try:
             forecast, result = load_weather(
                 reference,

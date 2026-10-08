@@ -515,7 +515,7 @@ class WeekendWeatherPipelineTest(unittest.TestCase):
             self.assertEqual(first["schema_version"], 6)
             self.assertEqual(first["jobs"]["openf1"]["status"], "stale")
             self.assertEqual(first["jobs"]["openf1_weekend_facts"]["status"], "stale")
-            self.assertEqual(first["jobs"]["track_geometry"]["status"], "unavailable")
+            self.assertNotIn("track_geometry", first["jobs"])
             self.assertEqual(first["jobs"]["open_meteo"]["status"], "unavailable")
             self.assertEqual(first_path, second_path)
             self.assertEqual(first["run_id"], second["run_id"])
