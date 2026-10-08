@@ -1,6 +1,6 @@
 # Projektdokumentation
 
-Diese Datei ist die begleitende technische Projektdokumentation und hält Prozess, Verifikationsnachweise, Probleme, Entscheidungen, Recherche und Abbildungen fest. Die verdichtete Abgabe steht in [`schriftliche_abgabe.md`](schriftliche_abgabe.md). Der jeweils verbindliche Detailstatus, das MVP-Ziel und alle Ausführungsbefehle werden weiterhin ausschließlich in der [`README.md`](../README.md) gepflegt.
+Diese Datei hält technischen Stand, Prozess, Verifikationsnachweise, Probleme, Entscheidungen, Recherche und Abbildungen fest. Die verdichtete Abgabe steht in [`schriftliche_abgabe.md`](schriftliche_abgabe.md). Die [`README.md`](../README.md) ist der kurze Einstieg mit Projektziel, Einrichtung und Start für Windows und macOS. Technische Details, Saisonabdeckung und offene Arbeitspakete werden hier gepflegt.
 
 ## 1. Ausgangslage und Ziel
 
@@ -110,6 +110,7 @@ sequenceDiagram
 		Geometry->>Ablage: Saisonale Centerline und Lineage-Manifest schreiben
 	end
 
+	opt Zweck benötigt Forecast: forecast, replay, complete oder Berechnung
 	Orchestrator->>Registry: OpenF1-Circuit-Key auflösen
 	alt Mapping manuell geprüft oder auto-verifiziert
 		Registry-->>Orchestrator: Wikidata-ID und Registry-Nachweis
@@ -131,6 +132,7 @@ sequenceDiagram
 		Orchestrator->>Ablage: Forecast-Snapshot und Facts schreiben
 	else Kein geprüftes Mapping
 		Note over Orchestrator,OpenMeteo: Wetterpfad bleibt fail-closed
+	end
 	end
 
 	Orchestrator->>Ablage: Inhaltsidentifiziertes Gesamtmanifest schreiben
@@ -247,7 +249,7 @@ Der Replay verarbeitet Positionen, Abstände, Runden, Reifen, Boxenstopps und Ra
 
 Das fachliche Zielbild besteht aus zwei Ansichten. Dashboard V1 besitzt eine Übersichtsseite für Saison, Rennwochenende und Session mit Kalender, Ergebnissen, Fahrer- und Teamwertungen, Siegen, Podien und wenigen einfachen Analysen. Die Re-live-Seite kombiniert rekonstruierte Fahrerreihenfolge, Wetter-Forecast und -Beobachtungen, Race-Control-Ereignisse und die nachgelagerte Strategieausgabe. Für die Bewegung kann zwischen dem synthetischen Circle of Doom und einer aus Fahrzeugkoordinaten abgeleiteten lokalen Streckenlinie gewechselt werden. Fehlt eine gültige Geometrie, bleibt der Circle die sichere Rückfallansicht. Qualifying- und Strategieausgaben werden als manifestausgewählte Calculation Snapshots angezeigt; sie sind Erweiterungen und kein Teil der schreibenden Dashboard-V1-Pipeline.
 
-Der Abgleich mit dem realisierten Stand zeigt eine bewusst ungleichmäßige Entwicklung. Meeting- und Sessionauswahl, zweckabhängige Ladepläne, OpenF1-Weekend-Ingestion, Wetter-Forecast, normalisierte Dimensionen und Facts, Ergebnisse und Standings sowie beide Dashboard-Seiten bilden bereits eine belastbare Grundlage. Dashboard V1 liest ausschließlich manifestausgewählte und hashgeprüfte kuratierte Daten; Ladeaktionen werden als deterministische Aufträge an einen getrennten lokalen Job-Service übergeben. Der leakage-freie Fact-Cut, Replay sowie versionierte Qualifying- und Race-Strategy-Snapshots sind umgesetzt. Ein dauerhaft persistierter Race-State-Service, Race-Prediction und eine breite Strategievaliderung fehlen weiterhin. Der verbindliche Detailstatus und die Zuordnung von Quellen über Bronze-Daten zu Features stehen in der [`README.md`](../README.md), damit der technische Stand nicht an zwei Stellen auseinanderläuft.
+Der Abgleich mit dem realisierten Stand zeigt eine bewusst ungleichmäßige Entwicklung. Meeting- und Sessionauswahl, zweckabhängige Ladepläne, OpenF1-Weekend-Ingestion, Wetter-Forecast, normalisierte Dimensionen und Facts, Ergebnisse und Standings sowie beide Dashboard-Seiten bilden bereits eine belastbare Grundlage. Dashboard V1 liest ausschließlich manifestausgewählte und hashgeprüfte kuratierte Daten; Ladeaktionen werden als deterministische Aufträge an einen getrennten lokalen Job-Service übergeben. Der leakage-freie Fact-Cut, Replay sowie versionierte Qualifying- und Race-Strategy-Snapshots sind umgesetzt. Ein dauerhaft persistierter Race-State-Service, Race-Prediction und eine breite Strategievaliderung fehlen weiterhin. Quellenrollen und Saisonabdeckung stehen in Abschnitt 3, Modellnachweise in Abschnitt 6 und offene Arbeitspakete in Abschnitt 8.1.
 
 Bedarfsorientiertes Laden ist auf Session-, Profil- und Endpoint-Ebene umgesetzt. Core lädt für Practice nur Fahrer, Runden, Stints und Wetter; Ergebnis- und Meisterschaftsdaten kommen nur bei passenden Sessiontypen hinzu. Replay ergänzt Position, Intervalle, Boxenstopps, Race Control und die fahrerweise geladene Location-Zeitreihe. `weekend_complete_v1` wendet diese Erweiterung auf Sprint und Race an. Forecasts besitzen einen eigenen Zweck und lösen keine Session-Ingestion aus. Die Dashboard-Buttons übergeben Aufträge an den getrennten Job-Service und zeigen dessen persistierten Status an; das Dashboard selbst bleibt read-only.
 
@@ -259,19 +261,19 @@ Die vollständigen technischen Kurzbeschreibungen stehen in den englischen Quell
 
 ### OpenF1
 
-OpenF1 liefert die Sessionidentität und die zeitaufgelöste Ereignisfolge. Die Verifikation prüft Erreichbarkeit, Antwortform, Pflichtfelder, Session-Schlüssel, Zeitstempel, Duplikate sowie das Schreiben und erneute Lesen der Parquet-Dateien.
+OpenF1 liefert die Sessionidentität und die zeitaufgelöste Ereignisfolge. Die offizielle Produktgrenze beginnt 2023; ältere Saisons gehören deshalb nicht zum aktuellen Primärpfad. Die Verifikation prüft Erreichbarkeit, Antwortform, Pflichtfelder, Session-Schlüssel, Zeitstempel, Duplikate sowie das Schreiben und erneute Lesen der Parquet-Dateien. Der lokale Job-Service weist Saisons vor 2023 nun explizit zurück, statt mit einer rein syntaktischen Untergrenze von 1950 eine nicht vorhandene Abdeckung anzudeuten.
 
 Für alle fünf Hungary-Sessions wurden 110 Session-Einträge, 3.232 Runden, 3.407 Positionsbeobachtungen, 429 Pit-Einträge, 453 Stints, 324 Race-Control-Meldungen und 473 Wetterzeilen als Silver-Facts persistiert. Die 29.593 Intervallbeobachtungen gehören zum Rennen; OpenF1 stellt diesen Endpoint für die geprüften Practice- und Qualifying-Sessions nicht bereit. Für Race `11342` wurden zusätzlich 22 Resultate, 22 Fahrerstände und 11 Teamstände als Bronze und Silver persistiert. Die bestehenden 783.772 Race-Positionskoordinaten bleiben ein zweckgebundener Replay-/Geometrie-Input und werden nicht in allgemeine Silver-Facts dupliziert. Diese Zahlen sind ein datierter Nachweis und keine Garantie für andere Meetings.
 
 ### FastF1
 
-FastF1 wird sessionzentriert geladen und lokal gecacht. Geprüft werden mindestens Fahrer, Rundennummer und Rundenzeit sowie – sofern vorhanden – Wetter. Die aktuelle Verifikation lädt Telemetrie ausdrücklich nicht. Für Hungary 2026 wurden 1.431 Runden und 157 Wetterzeilen gespeichert.
+FastF1 wird sessionzentriert geladen und lokal gecacht. Geprüft werden mindestens Fahrer, Rundennummer und Rundenzeit sowie – sofern vorhanden – Wetter. Die aktuelle Verifikation lädt Telemetrie ausdrücklich nicht. Für Hungary 2026 wurden 1.431 Runden und 157 Wetterzeilen gespeichert. Die Bibliothek unterstützt detaillierte Sessiondaten grundsätzlich ab 2018; die Projektintegration ist jedoch kein generischer Adapter, sondern ein fest auf Hungary 2026 Race begrenzter Cross-Check. Daraus folgt keine automatische Projektunterstützung für 2018 bis 2025.
 
 ### Weekend-Weather-Pipeline
 
 Der erste durchgängige Lauf verbindet OpenF1 `circuit_key=4` über ein manuell geprüftes Mapping mit Wikidata `Q171356`. Das Mapping liegt als versionierter Pipeline-Input in `config/reviewed_circuit_mappings.json`; Schema und Inhalts-Hash werden im Gesamtmanifest festgehalten. Für unbekannte Circuits existiert getrennt die gesperrt und atomar aktualisierte Auto-Registry unter `data/curated/registries/`. Nur genau ein Kandidat mit Name- oder Ortsevidenz, passendem Land, Rennstreckenbeschreibung und gültigem Earth-`P625` wird angenommen. Beide Registry-Hashes gehören zur Run-Identität.
 
-Open-Meteo liefert für den Akzeptanzfall den ECMWF-IFS-Lauf mit Initialisierung `2026-07-26T00:00:00Z`. Die ausgeführte Weekend-Weather-Pipeline speichert 168 stündliche Forecast-Zeilen, die vollständige Rohantwort, Requestparameter, Einheiten, Grid-Koordinaten, Zeitgrenzen und Hashes. Das konfigurierte `available_at=2026-07-26T06:00:00Z` ist eine konservative dokumentierte Latenzregel und kein Nachweis eines damaligen Abrufs. Für zukünftige Rennwochenenden führt der Scheduler eigenständige Forecast-Jobs 24, 6 und 1 Stunde vor einer Session aus.
+Open-Meteo liefert für den Akzeptanzfall den ECMWF-IFS-Lauf mit Initialisierung `2026-07-26T00:00:00Z`. Die ausgeführte Weekend-Weather-Pipeline speichert 168 stündliche Forecast-Zeilen, die vollständige Rohantwort, Requestparameter, Einheiten, Grid-Koordinaten, Zeitgrenzen und Hashes. Das konfigurierte `available_at=2026-07-26T06:00:00Z` ist eine konservative dokumentierte Latenzregel und kein Nachweis eines damaligen Abrufs. Für zukünftige Rennwochenenden führt der Scheduler eigenständige Single-Run-Jobs 24, 6 und 1 Stunde vor einer Session aus. Open-Meteo archiviert vollständige ECMWF-IFS-HRES-Single-Runs ab `2024-03-14`; die Pipeline beendet ältere Forecastversuche deshalb vor dem HTTP-Aufruf mit `unavailable`.
 
 Die Historical Forecast API bildet eine fortlaufende Reihe aus den ersten Stunden aufeinanderfolgender Modellläufe und eignet sich für Training und Vergleiche. Previous Runs dienen optional dem Vergleich fester Vorlaufzeiten. Historical Weather sowie Wetterdaten aus OpenF1 und FastF1 sind Beobachtungs- beziehungsweise Referenzdaten. Sie bewerten einen Forecast, ersetzen oder verändern ihn aber nicht rückwirkend.
 
@@ -280,6 +282,54 @@ Open-Meteo bietet weltweite Modellabdeckung; stündliche Daten sind der gemeinsa
 ### Verifikationsnachweis
 
 Der ausführbare Verifikationslauf schreibt seinen Ergebnisbericht nach `data/artifacts/source_verification/hungary_2026.json`. Die Weekend-Pipeline schreibt zusätzlich inhaltsidentifizierte Endpoint-, Session-, Weekend-, Geometry- und Gesamtmanifeste nach `data/curated/manifests/`. Der Hungary-Lauf entdeckte fünf Sessions, verwendete Wikidata `Q171356`, persistierte elf Silver-Fact-Typen und speicherte 168 Forecast-Zeilen. Am 28. August 2026 bestätigte ein Live-Check für OpenF1 2025 insgesamt 25 Meetings und für Spa-Francorchamps fünf Sessions. Die neue Auflösung verifizierte Spa eindeutig als `Q172851` mit Breite `50.437222222222` und Länge `5.9713888888889`. Der manifestgebundene reale Geometry-Build für Session `11342` erzeugte aus fünf Runden 201 Punkte mit Status `available`. Die Zustände `available`, `partial`, `stale` und `unavailable` verhindern, dass fehlende Daten als gültige Nullwerte erscheinen.
+
+### Saisonübergreifende Capability-Matrix
+
+Stand 9. Oktober 2026 bedeutet „vollständig“: OpenF1-Daten, Session-Replay, lokale Streckengeometrie, verifizierte Wikidata-Koordinate und ein zu `decision_time` zulässiger vollständiger ECMWF-IFS-Single-Run funktionieren gemeinsam. Diese Definition trennt technische Parametrierbarkeit von einem praktisch nachgewiesenen End-to-End-Fall.
+
+| Zeitraum | Verbindlicher Projektstatus |
+|---|---|
+| 2026 | Vollständiger Akzeptanzfall Hungary nachgewiesen. Weitere Wochenenden besitzen Teil- und Regressionsnachweise, aber nicht dieselbe Prüftiefe. |
+| 2025 | Zandvoort belegt OpenF1-Replay und Geometrie. Ein vollständiger Saison-/Wetter-Akzeptanzlauf fehlt. |
+| Ab Australian GP 2024 | OpenF1 und archivierte ECMWF-Single-Runs ermöglichen den vollständigen Pfad voraussichtlich ohne Codeänderung; praktisch noch nicht End-to-End validiert. |
+| Bahrain und Saudi Arabia 2024 | F1-Teilpipeline technisch möglich, aber der erforderliche Single Run liegt vor dem Archivbeginn `2024-03-14`; Wetter bleibt `unavailable`. |
+| 2023 | OpenF1-Ingestion und Replay liegen innerhalb der Primärquellenabdeckung. Ohne vollständigen historischen Single Run bleibt es eine Teilpipeline. |
+| 2018–2022 | Kein aktueller Primärpfad. FastF1 kann viele detaillierte Sessions liefern, ist im Projekt aber nur als enger Cross-Check und nicht als generischer Ersatzadapter integriert. |
+| 1950–2017 | Nicht unterstützt. Ergebnisarchive wie Jolpica würden eine neue Projektquelle darstellen und weder den aktuellen Replay- noch Forecastvertrag erfüllen. |
+| 2027 und später | Architektur und Jobparameter sind vorbereitet, die Funktion hängt aber von veröffentlichten Kalendern, Providerdaten und kompatiblen Schemas ab und ist heute nicht garantierbar. |
+
+Streng formuliert ist damit nur 2026 nachgewiesen; 2025 und die Saison 2024 ab Australien sind ohne Codeänderung plausibel, 2023 und die ersten beiden Rennen 2024 besitzen nur den F1-Pfad, und 2022 oder früher benötigen einen neuen Primäradapter. Das Dashboard entdeckt Saisons ausschließlich über gültige lokale `master_data_<Jahr>.json`-Manifeste. Lokal existiert derzeit nur `master_data_2026.json`, weshalb nur 2026 auswählbar ist.
+
+| Capability beziehungsweise Endpoint-Gruppe | Aktuelle Grenze |
+|---|---|
+| OpenF1 Meetings, Sessions, Fahrer, Runden, Stints, Beobachtungen und Ergebnisse | Produktumfang ab 2023; Felder und Zeilen bleiben sessionabhängig. |
+| OpenF1 Replay: Positionen, Intervalle, Pit, Race Control und Location | Produktumfang ab 2023; einzelne Endpoints können je Session optional oder nicht verfügbar sein. |
+| OpenF1 Pit-Felder | `lane_duration` ist das stabile Validierungsfeld; `stop_duration` existiert erst ab dem United States GP 2024. |
+| Vollständiger ECMWF-IFS-Single-Run | Ab `2024-03-14`; ältere Anfragen enden vor dem HTTP-Zugriff. |
+| Wikidata Streckenidentität und Koordinate | Keine Saisonuntergrenze, aber keine historischen Layouts; mehrdeutige Mappings bleiben `partial`. |
+| FastF1-Cross-Check | Aktueller Adapter nur für Hungary 2026 Race, Runden und beobachtetes Wetter; kein primärer Fallback. |
+
+Historical Weather ab 1940 ist eine Reanalyse und kein damals verfügbarer Forecast. OpenF1- und FastF1-Wetter sind Beobachtungen. Der Historical-Forecast-Datensatz verbindet Ausschnitte aufeinanderfolgender Modellläufe, Previous Runs liefern feste Vorlaufzeiten; beide ersetzen keinen vollständigen Single-Run-Vintage. Für historische Läufe bleibt `available_at = run_initialized_at + 6 h` eine konservative Projektregel und kein beobachteter damaliger Veröffentlichungszeitpunkt.
+
+Wikidata besitzt keine sachliche Saisonuntergrenze, liefert aber nur Identität, aktuelle WGS84-Referenzkoordinate, Entity und Revision. Es liefert keine historische Streckengeometrie. Hungaroring, Sepang und Zandvoort sind manuell geprüft; andere Circuits benötigen eine eindeutige Auto-Auflösung oder bleiben `partial`. Umgebaute oder verlegte Strecken können künftig eine zeitlich versionierte Zuordnung erfordern.
+
+### Operative Laufzeiten und Quellenlimits
+
+Die aktuell 73 gespeicherten Pipeline-Manifeste umfassen verschiedene Entwicklungsstände sowie Erstabrufe und Cache-Wiederverwendung. Sieben ältere Manifeste ohne Zweckangabe sind aus der folgenden Gruppierung ausgeschlossen. Die Werte sind deshalb beobachtete Planungsgrößen und kein Benchmark oder SLA.
+
+| Zweck | Läufe | Median | beobachtete Spanne |
+|---|---:|---:|---:|
+| Core-/Weekend-Job | 33 | 58,23 s | 0,46–214,77 s |
+| Complete Weekend | 13 | 33,27 s | 1,46–348,49 s |
+| Replay | 13 | 15,56 s | 0,56–180,38 s |
+| Qualifying Prediction | 2 | 27,73 s | 3,45–52,00 s |
+| Race Strategy | 5 | 5,47 s | 2,67–98,69 s |
+
+Der Bahrain-Replay mit vollständigem Neuabruf benötigte `180,38 s`, der vollständige Bahrain-Weekend-Lauf etwa `245,43 s`; das beobachtete Maximum für Complete Weekend beträgt `348,49 s`. Große Replay-Läufe werden von der fahrerweise geladenen `location`-Zeitreihe dominiert. Nach der Core-Profil-Verkleinerung müssen reine Sessionloads erneut separat gemessen werden; historische breite Profile dürfen nicht als Prognose für den optimierten Normalfall ausgegeben werden.
+
+OpenF1 erlaubt im kostenlosen historischen Zugriff drei Requests pro Sekunde und 30 pro Minute. Der Clientabstand von 2,1 Sekunden entspricht höchstens etwa 28,6 Requests pro Minute. Zusätzlich serialisiert die gemeinsame `source_pipeline`-Sperre alle über Dashboard und Scheduler gestarteten Quellenjobs; direkte Source-CLIs bleiben außerhalb dieser Grenze. Open-Meteo erlaubt im freien nichtkommerziellen Zugang 600 Requests pro Minute, 5.000 pro Stunde und 10.000 pro Tag. Drei gebündelte Forecast-Slots pro Session liegen weit darunter. Wikidata wird über Registry und Cache praktisch nur bei neuen Circuits benötigt. FastF1 bleibt ein später, nicht blockierender Cross-Check ohne Verfügbarkeitsgarantie.
+
+Die OpenF1-Schemas bleiben eine operative Grenze: `stop_duration` existiert erst seit dem United States GP 2024, `pit_duration` und das Fahrerfeld `country_code` sollen nach 2026 entfallen. Die Pipeline validiert Pit-Lane-Zeit deshalb gegen das dauerhafte Feld `lane_duration`; `stop_duration` bleibt optional und fehlende Ländercodes bleiben fehlend.
 
 ## 4. Aufgetretene Probleme und Hindernisse
 
@@ -510,7 +560,11 @@ Im Unterschied zu AWS entfernen wir ein abweichendes Wetterregime nicht vollstä
 
 Vor einer Erhöhung der Modellkomplexität müssen die festen Werte mit einem leakage-freien Walk-forward-Backtest abgestimmt werden. Vergleichsmaßstab ist mindestens die jeweils letzte Practice- beziehungsweise Sprint-Qualifying-Session ohne Korrektur. Zu messen sind Zeit- und Rangfehler sowie die Kalibrierung der Top-N-Wahrscheinlichkeiten. Erst ein reproduzierbarer Vorteil gegenüber dieser Baseline rechtfertigt angepasste Gewichte oder ein ML-Modell.
 
-Ein erster lokaler Walk-forward-Lauf mit Datenstand 4. September 2026 konnte fünf von 14 abgeschlossenen Haupt-Qualifyings auswerten; für neun Ziele fehlten Ziel- oder Quellsession-Manifeste. Die einfache letzte One-Lap-Session erreichte einen mittleren absoluten Positionsfehler von `1,21`, das aktuell gewichtete und historisch kalibrierte Modell `1,27`. Beim feldrelativen Zeitabstand war das kalibrierte Modell mit `0,449 s` gegenüber `0,469 s` geringfügig besser. Die aktuellen Gewichte ohne historische Kalibrierung erreichten zwar `0,442 s`, aber einen schlechteren Positionsfehler von `1,32`; die Kalibrierung verbesserte auf dieser Stichprobe somit die Position, nicht den Zeitabstand. Die Brier Scores der letzten One-Lap-Session waren für Top 5, Top 10 und Top 15 mit `0,065`, `0,067` und `0,045` jeweils besser als `0,076`, `0,073` und `0,058` beim kalibrierten Modell. Wegen der kleinen, selektiven Stichprobe ist das kein belastbarer Modellvergleich. Historisch rechtzeitig verfügbare Forecasts decken die Ziele nicht ausreichend ab; Wettergewichte und der Unsicherheitsmultiplikator wurden deshalb bewusst nicht mit späteren Beobachtungen getestet. Die Produktionsgewichte bleiben bis zu breiterer Abdeckung unverändert.
+Der am 9. Oktober 2026 erneut ausgeführte lokale Walk-forward-Lauf umfasst sechs abgeschlossene Haupt-Qualifyings und 129 Fahrerresultate. Das historisch kalibrierte Modell erreicht einen mittleren absoluten Positionsfehler von `1,45`, einen Zeitabstandsfehler von `0,442 s`, eine Spearman-Rangkorrelation von `0,947` und eine Top-10-Übereinstimmung von `91,7 %`. Die einfache letzte One-Lap-Session ist beim Positionsfehler mit `1,37` und bei der Rangkorrelation mit `0,949` besser, beim Zeitabstand mit `0,453 s` und bei der Top-10-Übereinstimmung mit `88,3 %` geringfügig schlechter. Das kalibrierte Modell bildet das Feld damit gut ab, weist gegenüber der einfachen Baseline aber keinen belastbaren Gesamtmehrwert nach.
+
+China ist mit `0,91` Positionen Fehler, `0,977` Rangkorrelation und vollständiger Top 10 der beste Rangfolgefall, besitzt aber `0,733 s` Zeitabstandsfehler. Belgien ist mit `1,00`, `0,968` und `0,478 s` ausgewogener. Hungary erreicht `1,36`, `0,962` und erkennt alle tatsächlichen Top-5-Fahrer. Australia ist mit `1,79` Positionen und nur `60 %` Top-5-Übereinstimmung ein ehrliches Modell-Gegenbeispiel. Das verlegte Bahrain-Wochenende in Malaysia ist mit `2,36` Positionen und `0,875` Rangkorrelation der schwächste Fall und zugleich ein Härtetest für Streckenidentität und Zeitverträge. Die sechs Ereignisse bleiben eine kleine, selektive Stichprobe. Historisch rechtzeitig verfügbare Forecasts decken die Ziele nicht ausreichend ab; Wettergewichte und der Unsicherheitsmultiplikator wurden deshalb nicht mit späteren Beobachtungen nachkalibriert. Die Produktionsgewichte bleiben unverändert.
+
+Nach tatsächlichem Leistungsbereich ist die Pace der Top 5 am stabilsten (`1,20` Positionen; `0,259 s`). P6 bis P10 besitzt mit `1,60` den größten Rangfehler, während ab P11 besonders der Zeitabstandsfehler auf `0,559 s` steigt. Das Muster ist nicht einfach „Topteam gut, kleines Team schlecht“: McLaren liegt bei `0,92` Positionen, Red Bull bei `1,27`, Ferrari bei `1,67`, Mercedes bei `1,92` und Alpine bei `2,25`; Williams und Cadillac erreichen jeweils `1,00`. Die ungleichen Fahrerzahlen je Team und nur sechs Rennen erlauben keine allgemeine Teamrangliste.
 
 ### 6.5 Implementierte Race-Strategy-Baseline
 
@@ -518,7 +572,11 @@ Die Race-Strategy-Berechnung ist als `race_strategy_features_v1` und `race_strat
 
 Die Empfehlung bezieht sich auf einen Fokusfahrer, verarbeitet für Boxenausfahrt und Verkehr aber das gesamte zu diesem Zeitpunkt bekannte Feld. Ausgegeben werden Aktion, nächste Mischung, Zielrunde, Stintplan, erwartete Endposition sowie Position, Vorder- und Hintermann nach einem hypothetischen Stopp. Beobachteter Regen und ein innerhalb von acht Runden liegendes Forecast-Fenster können auf Intermediate beziehungsweise bei Safety Car plus gemeldeter geringer Haftung auf Wet umstellen. Eine Rotphase setzt die Empfehlung bis zum Restart aus. Der Algorithmus kennt weder den physischen Reifensatzbestand noch zukünftige Neutralisationen oder tatsächliche Reaktionen der Gegner; diese Grenzen stehen in jedem Ergebnis.
 
-Die echte Teamstrategie wird getrennt ausgewertet und erst nach dem veröffentlichten Boxenausgang sichtbar. Für jeden tatsächlichen Stopp speichert die Evaluation empfohlene und reale Runde, Rundendifferenz, Übereinstimmung innerhalb einer beziehungsweise zwei Runden und die Mischungsübereinstimmung. Der Hungary-Akzeptanzlauf für einen Fokusfahrer erzeugte 187 zeitlich geordnete Empfehlungen und ordnete zwei reale Stopps zu. Dieser Lauf belegt Reproduzierbarkeit, temporale Trennung und UI-Integration, aber noch keine Vorhersagegüte. Dafür müssen mehrere Fahrer und Rennen mit derselben Walk-forward-Grenze ausgewertet und mindestens gegen einfache feste Ein- und Zweistopppläne verglichen werden.
+Die echte Teamstrategie wird getrennt ausgewertet und erst nach dem veröffentlichten Boxenausgang sichtbar. Für jeden tatsächlichen Stopp speichert die Evaluation empfohlene und reale Runde, Rundendifferenz, Übereinstimmung innerhalb einer beziehungsweise zwei Runden und die Mischungsübereinstimmung. Der Hungary-Akzeptanzlauf für Fahrer `1` erzeugte 187 zeitlich geordnete Empfehlungen und ordnete zwei reale Stopps zu. Im Snapshot mit `race_strategy_rules_v4` stand vor Runde 17 die Empfehlung Runde 20/Hard und vor Runde 56 die Empfehlung Runde 56/Hard; real waren es Runde 17/Hard und Runde 56/Soft. Das entspricht `1,5` Runden mittlerem Timingfehler, einem von zwei Stopps innerhalb einer Runde und einer von zwei passenden Mischungen. Ein früherer Snapshot mit `race_strategy_rules_v3` enthielt für den zweiten Stopp keine Empfehlung; die Kennzahlen sind deshalb ein versionierter Einzelfall und keine stabile allgemeine Modellgüte. Für Fahrer `4` liegt kein auswertbarer Stoppvergleich vor, weshalb dieser Nachweis nicht Norris zugeschrieben wird. Mehrere Fahrer und Rennen müssen mit derselben Walk-forward-Grenze und gegen einfache feste Ein- und Zweistopppläne verglichen werden.
+
+Wetter wirkt in beiden Baselines, aber unterschiedlich. In der Qualifying-Berechnung werden Trainingsrunden bei abweichendem Trocken-/Nassregime auf `25 %` gewichtet, Temperatur fließt in Kalibrierungsgruppen ein und ein fehlender zulässiger Ziel-Forecast erhöht die Unsicherheit um den Faktor `1,50`; ein physikalischer Regenzeitverlust wird nicht berechnet. In der Strategie wirken beobachteter Regen und Forecast-Regen innerhalb der nächsten acht Runden direkt auf Intermediate-/Wet-Kandidaten. Regenintensität, Abtrocknung, Crossover-Zeitpunkt und Wet-Pace sind noch nicht ausreichend modelliert.
+
+Pit-Loss-Werte sind derzeit statische, saisonunabhängige Annahmen; die getrennte Renndistanzdatei gilt nur für 2026. Um bei verlegten Veranstaltungen keinen Wert über den Grand-Prix-Namen vom ursprünglichen Austragungsort zu übernehmen, verwendet die Strategie nur tatsächlichen Streckenort, Streckenname und Land. Fehlt dafür ein Eintrag, endet sie fail-closed als `unavailable`. Für eine belastbare saisonübergreifende Strategie müssen Circuit-ID, Layout sowie `valid_from` und `valid_to` in die Konfiguration aufgenommen werden.
 
 Daraus folgt die favorisierte Forschungsfrage:
 
@@ -564,7 +622,49 @@ Der zweite Streckenfall zeigt, dass die Geometrieerkennung nicht ausschließlich
 
 ## 8. Nächste Schritte der Dokumentation
 
-Neue technische Fähigkeiten werden zuerst im Status und in der Roadmap der [`README.md`](../README.md) aktualisiert. Diese Projektdokumentation wird nur ergänzt, wenn sich Vorgehen, Verifikation, Hindernisse, Entscheidungen oder auswertbare Ergebnisse ändern. Quellenspezifische Änderungen gehören in die jeweilige Quellenkarte.
+Technischer Stand und offene Arbeitspakete werden in dieser Projektdokumentation gepflegt und mit der schriftlichen Abgabe abgeglichen. Die [`README.md`](../README.md) bleibt ein kurzer Einstieg; Änderungen an Projektziel, Einrichtung und Start werden dort aktualisiert. Quellenspezifische Änderungen gehören in die jeweilige Quellenkarte. Architekturabbildungen stehen in den Projektdokumenten; frühere UI- und Geometrieentwürfe in Abschnitt 7 sind ausdrücklich als historische Entwicklung gekennzeichnet.
+
+### 8.1 Offene Umsetzung und Nachweise
+
+Stand 9. Oktober 2026 sind die folgenden Punkte offen. Saisonparameter, Unit-Tests und ein implementierter Scheduler ersetzen weder saisonübergreifende Akzeptanzläufe noch tatsächlich vor einer Session erfasste Forecasts. Die Kennungen entsprechen Abschnitt 6.4 der schriftlichen Abgabe.
+
+| ID | Offener Punkt und aktueller Stand | Abschlusskriterium |
+|---|---|---|
+| O1 | Mehrsaisonale Akzeptanz: Nur Hungary 2026 ist vollständig belegt. | Manifestgebundene Läufe für ein normales Wochenende 2023, ein frühes und spätes Wochenende 2024 sowie ein normales und Sprint-Wochenende 2025. Bahrain/Sepang 2026 zusätzlich als verlegten Sonderfall prüfen. Ingestion, Replay, Geometrie, Wikidata und Forecast jeweils getrennt bewerten; vor Archivbeginn muss Wetter ausdrücklich unverfügbar bleiben. |
+| O2 | Capability-Matrix: Dokumentiert, aber noch keine vollständige maschinenlesbare Entscheidung je Jahr, Endpoint und Feature. | Dauerhaft nicht unterstützte Eingaben und temporär fehlende Providerdaten über eindeutige Gründe unterscheiden. Ein Retry darf nur für temporäre Ausfälle geplant werden; die Qualitätsstatus bleiben separat nachvollziehbar. |
+| O3 | FastF1 generalisieren: Adapter derzeit auf Hungary 2026 Race begrenzt. | Saison, Meeting und Session parametrisieren und mit zwei Saisons nachweisen. Quellvergleiche getrennt persistieren; keine automatische Reparatur fehlender OpenF1-Facts und keine Blockade des Primärpfads. |
+| O4 | Forecast-Capture: T−24 h, T−6 h und T−1 h geplant; umfassender zukünftiger Betriebsnachweis fehlt. | Slots an einem kommenden Wochenende tatsächlich ausführen, Abrufbelege und unveränderliche Snapshots sichern sowie Wiederanlauf nach Prozessunterbrechung prüfen. Verpasste Slots bleiben fehlend und dürfen nicht rückdatiert werden. |
+| O5 | Schema und fachliche Coverage: Pit-Validierung angepasst, semantische Lückenprüfung noch unvollständig. | Betrieb ohne die abgekündigten Pit-Duration- und Fahrer-Länderfelder, neue Sessionformate und optionale Endpoints prüfen. Fahrer- und Rundenlücken als Manifestdiagnosen speichern und unvollständige Pflichtdaten als `partial` kennzeichnen. |
+| O6 | Zeitliche Versionierung: Circuit-Mappings und Pit Loss noch nicht nach historischem Layout versioniert; Renndistanz nur für 2026 konfiguriert. | Circuit-ID, Layout, Wikidata-Referenz, Pit Loss und Renndistanz anhand stabiler Identitäten und Gültigkeitsintervalle auflösen. Verlegte Rennen und Layoutwechsel als Akzeptanzfälle prüfen. |
+| O7 | Laufzeiten: Vorhandene Messungen mischen alte Profile, Erstabrufe und Cache. | Aktuelle Core-Sessionloads, Complete Weekend und Replay jeweils mit und ohne Cache messen; Zweck, Datenmenge, Requestanzahl und Dauer festhalten. |
+| O8 | Modellqualität: Kleine selektive Qualifying-Stichprobe und wenige gültige Strategy-Vergleiche. | Versionierte Baselines über weitere Rennen und Fahrer mit identischem temporalen Cut und dokumentierter Forecastabdeckung vergleichen. Fehlende Empfehlungen und partielle Inputs in der Evaluation sichtbar erhalten. |
+
+Für die Pipeline stehen O1, O2, O4, O5 und O7 zuerst an. O3 bleibt unabhängige Verifikation; die Pit-Loss-Annahmen aus O6 und Modellgüte aus O8 betreffen nachgelagerte Verbraucher. Sie sind keine Voraussetzung für Dashboard-Downloads. Ältere Saisons vor 2023 benötigen weiterhin einen neuen Primäradapter; 2027 und spätere Saisons sind erst mit veröffentlichten Providerdaten verifizierbar.
+
+### 8.2 Technische Ausführungsbefehle
+
+Die Befehle setzen das aktivierte virtuelle Environment und `PYTHONPATH=src` im Repository voraus. Einrichtung und der Start von Job-Service und Dashboard stehen in der README. Der Scheduler läuft optional in einem dritten Terminal; er wartet auf bekannte Ereigniszeiten.
+
+```bash
+python -m f1_pipeline.scheduler --season 2026 --watch --refresh-calendar
+```
+
+Ohne `--watch` wird nur ein Durchlauf für aktuell fällige Jobs ausgeführt. `--refresh-calendar` aktualisiert den Fahrplan. Für Unit-Tests, Quellenverifikation und lokale Analysen:
+
+```bash
+python -m unittest discover -s tests/unit -p "test_*.py"
+python -m f1_pipeline.sources.session_verification
+python -m f1_pipeline.analysis.pace --session-key 11342
+python -m f1_pipeline.analysis.qualifying_backtest --season 2026 --as-of 2026-10-09T00:00:00Z
+```
+
+Die Source-Verifikation kann fehlende Quellen abrufen; die Analyse- und Backtestbefehle verwenden lokale Daten. Der vollständige historische Hungary-Akzeptanzlauf ist über folgenden Befehl reproduzierbar:
+
+```bash
+python -m f1_pipeline.sources.weekend_weather_pipeline --season 2026 --meeting-key 1291 --purpose weekend_complete_v1 --target-session-key 11342 --decision-time 2026-07-26T16:00:00Z --run-initialized-at 2026-07-26T00:00:00Z --available-at 2026-07-26T06:00:00Z --strict
+```
+
+Das historische `available_at` bleibt eine dokumentierte Latenzannahme. Neue Downloads können auch über das Dashboard gestartet werden; CLI-Optionen sind jeweils mit `--help` abrufbar. Direkte Quellen-CLIs sollen nicht parallel zu verwalteten Downloads laufen. Generierte Nachweise liegen unter `data/artifacts/`, kuratierte Manifeste unter `data/curated/manifests/`. Die Abhängigkeiten in `requirements.txt` sind noch nicht vollständig versioniert.
 
 ## 9. Verwendete Grundlagen
 

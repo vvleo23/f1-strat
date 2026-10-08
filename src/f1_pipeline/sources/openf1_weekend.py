@@ -147,7 +147,7 @@ NUMERIC_COLUMNS = {
     "laps": ("session_key", "driver_number", "lap_number", "lap_duration"),
     "intervals": ("session_key", "driver_number"),
     "position": ("session_key", "driver_number", "position"),
-    "pit": ("session_key", "driver_number", "lap_number", "pit_duration"),
+    "pit": ("session_key", "driver_number", "lap_number", "lane_duration"),
     "stints": (
         "session_key",
         "driver_number",

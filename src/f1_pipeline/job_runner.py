@@ -16,6 +16,7 @@ from f1_pipeline.settings import CURATED_DATA_DIR
 from f1_pipeline.sources.weekend_weather_pipeline import run_weekend_weather_pipeline
 
 JOB_MANIFEST_DIR = CURATED_DATA_DIR / "manifests" / "jobs"
+MIN_OPENF1_SEASON = 2023
 JOB_PURPOSES = frozenset(
     {
         "forecast",
@@ -56,8 +57,10 @@ class WeekendJobIntent:
             raise JobRunnerError(
                 f"Dashboard jobs require one of: {', '.join(sorted(JOB_PURPOSES))}."
             )
-        if self.season < 1950:
-            raise JobRunnerError("Season must be 1950 or later.")
+        if self.season < MIN_OPENF1_SEASON:
+            raise JobRunnerError(
+                f"OpenF1-backed jobs require season {MIN_OPENF1_SEASON} or later."
+            )
         if self.meeting_key <= 0:
             raise JobRunnerError("Meeting key must be positive.")
         if (

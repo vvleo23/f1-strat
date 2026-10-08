@@ -19,6 +19,7 @@ from f1_pipeline.sources.wikidata import CircuitReference
 API_URL = "https://single-runs-api.open-meteo.com/v1/forecast"
 REQUEST_TIMEOUT_SECONDS = 60
 MODEL = "ecmwf_ifs"
+ECMWF_IFS_SINGLE_RUN_AVAILABLE_FROM = pd.Timestamp("2024-03-14T00:00:00Z")
 HOURLY_VARIABLES = (
     "temperature_2m",
     "relative_humidity_2m",
@@ -250,6 +251,10 @@ def load_forecast(
         retrieved_at: datetime | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     run_time = utc_timestamp(run_initialized_at, "run_initialized_at")
+    if run_time < ECMWF_IFS_SINGLE_RUN_AVAILABLE_FROM:
+        raise OpenMeteoError(
+            "ECMWF IFS Single Runs are unavailable before 2024-03-14."
+        )
     availability_time = utc_timestamp(available_at, "available_at")
     cut_time = utc_timestamp(decision_time, "decision_time")
     checked_at = utc_timestamp(retrieved_at or datetime.now(timezone.utc), "retrieved_at")

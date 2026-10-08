@@ -15,6 +15,7 @@ from f1_pipeline.planning import SessionPlanningError, plan_sessions_for_purpose
 from f1_pipeline.sources.open_meteo import (
     HOURLY_VARIABLES,
     OpenMeteoError,
+    load_forecast,
     normalize_forecast,
     select_historical_single_run,
     validate_forecast_horizon,
@@ -34,6 +35,36 @@ from f1_pipeline.sources.wikidata import (
 
 
 class WeekendWeatherPipelineTest(unittest.TestCase):
+    def test_single_run_before_archive_start_fails_without_request(self) -> None:
+        class Client:
+            def get_forecast(self, params: dict[str, Any]) -> dict[str, Any]:
+                raise AssertionError("Unavailable runs must not call Open-Meteo")
+
+        reference = CircuitReference(
+            1,
+            "Q1",
+            "Test Circuit",
+            0.0,
+            0.0,
+            "EPSG:4326",
+            1,
+            "2024-01-01T00:00:00+00:00",
+            "verified",
+            "reference.json",
+            "hash",
+        )
+
+        with self.assertRaisesRegex(OpenMeteoError, "before 2024-03-14"):
+            load_forecast(
+                reference,
+                session_id="openf1:session:1",
+                circuit_id="openf1:circuit:1",
+                run_initialized_at="2024-03-13T18:00:00Z",
+                available_at="2024-03-14T00:00:00Z",
+                decision_time="2024-03-14T01:00:00Z",
+                client=Client(),
+            )
+
     def test_wikidata_accepts_only_the_reviewed_hungaroring_reference(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             raw_path = Path(temporary) / "Q171356.json"

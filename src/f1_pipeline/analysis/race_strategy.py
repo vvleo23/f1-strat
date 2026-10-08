@@ -1000,7 +1000,6 @@ def build_race_strategy(
         except RaceStrategyError as exc:
             errors.append(str(exc))
     identifiers = (
-        context.get("meeting_name"),
         context.get("circuit_location"),
         context.get("circuit_name"),
         context.get("circuit_country"),

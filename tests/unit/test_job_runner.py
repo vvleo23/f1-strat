@@ -145,6 +145,18 @@ class JobRunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(JobRunnerError, "focus driver"):
             intent.normalized()
 
+    def test_openf1_jobs_reject_unsupported_seasons(self) -> None:
+        intent = WeekendJobIntent(
+            season=2022,
+            meeting_key=1,
+            purpose="weekend",
+            target_session_key=None,
+            decision_time="2022-01-01T00:00:00Z",
+        )
+
+        with self.assertRaisesRegex(JobRunnerError, "2023 or later"):
+            intent.normalized()
+
 
 if __name__ == "__main__":
     unittest.main()

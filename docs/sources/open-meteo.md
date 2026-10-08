@@ -8,8 +8,8 @@
 
 | API | Project use | Decision |
 |---|---|---|
-| [Weather Forecast](https://open-meteo.com/en/docs) | Capture forecasts during a future selected weekend | Primary scheduled snapshot source |
-| [Single Runs](https://open-meteo.com/en/docs/single-runs-api) | Reproduce one explicit historical model run and its full forecast horizon | Primary historical replay source when the run was available |
+| [Weather Forecast](https://open-meteo.com/en/docs) | Latest operational forecast | Not used by the current point-in-time pipeline |
+| [Single Runs](https://open-meteo.com/en/docs/single-runs-api) | Capture or reproduce one explicit model run and its full forecast horizon | Primary scheduled and historical forecast source when the run is available |
 | [Historical Forecast](https://open-meteo.com/en/docs/historical-forecast-api) | Continuous series stitched from the first hours of successive runs | Training, benchmark, and forecast evaluation only |
 | [Previous Runs](https://open-meteo.com/en/docs/previous-runs-api) | Fixed lead-time series from previous runs | Optional lead-time comparison such as `T-1 day` |
 | [Historical Weather](https://open-meteo.com/en/docs/historical-weather-api) | Retrospective model-based weather | Evaluation reference only, never a forecast input |
@@ -31,7 +31,7 @@ The Single Runs `run` parameter is the model initialization time, not its public
 
 The Hungary acceptance run loads the ECMWF IFS run initialized at `2026-07-26T00:00:00Z`. The pipeline stores 168 hourly rows, the immutable raw response, normalized Silver facts, hashes, and the exact request. When explicit run times are omitted, it selects the latest 00/06/12/18 UTC model cycle whose initialization plus a conservative six-hour publication allowance is not later than `decision_time`. This policy is not proof of observed historical availability. The returned forecast horizon must cover the selected target session.
 
-- Store Weather Forecast API responses at approximately `T-24 h`, `T-6 h`, and `T-1 h` for each relevant session.
+- Store explicit Single Run responses at `T-24 h`, `T-6 h`, and `T-1 h` for each relevant session.
 - Read the validated WGS84 circuit point from curated Wikidata master data; never geocode a circuit or city name inside the weather job.
 - Batch required variables and locations to stay within provider limits.
 - Write each response atomically and never replace an earlier valid snapshot.
@@ -53,6 +53,6 @@ The Hungary acceptance run loads the ECMWF IFS run initialized at `2026-07-26T00
 - Hourly data is the portable worldwide baseline.
 - Native 15-minute data is mainly provided by HRRR in North America and ICON-D2 or AROME in Central Europe. Other regions use interpolation from hourly values.
 - Grid forecasts are not trackside measurements and must not be described as refined by later observations.
-- Single Runs currently archive ECMWF IFS HRES from March 2024 and most other models from 2 April 2026.
+- Single Runs archive ECMWF IFS HRES from 14 March 2024 and most other models from 2 April 2026. The client fails before making a request when the selected ECMWF run predates that boundary.
 - Historical Forecast coverage starts around 2022 and combines successive runs rather than preserving one complete run.
 - The free non-commercial endpoint is limited to 10,000 calls per day and has no uptime guarantee.

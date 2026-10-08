@@ -114,7 +114,7 @@ ENDPOINT_NUMERIC_COLUMNS: dict[str, tuple[str, ...]] = {
     "intervals": ("session_key", "driver_number"),
     "position": ("session_key", "driver_number", "position"),
     "location": ("session_key", "driver_number", "x", "y", "z"),
-    "pit": ("session_key", "driver_number", "lap_number", "pit_duration"),
+    "pit": ("session_key", "driver_number", "lap_number", "lane_duration"),
     "stints": ("session_key", "driver_number", "stint_number", "lap_start", "lap_end", "tyre_age_at_start"),
     "race_control": ("session_key", "driver_number", "lap_number"),
     "weather": ("session_key",),
