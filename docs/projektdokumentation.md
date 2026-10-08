@@ -1,6 +1,6 @@
 # Projektdokumentation
 
-Diese Datei ist die Grundlage für die spätere schriftliche Abgabe und beschreibt die zentralen Daten-, Speicher- und Zeitkonventionen eigenständig. Der jeweils verbindliche Detailstatus, das MVP-Ziel und alle Ausführungsbefehle werden weiterhin ausschließlich in der [`README.md`](../README.md) gepflegt.
+Diese Datei ist die begleitende technische Projektdokumentation und hält Prozess, Verifikationsnachweise, Probleme, Entscheidungen, Recherche und Abbildungen fest. Die verdichtete Abgabe steht in [`schriftliche_abgabe.md`](schriftliche_abgabe.md). Der jeweils verbindliche Detailstatus, das MVP-Ziel und alle Ausführungsbefehle werden weiterhin ausschließlich in der [`README.md`](../README.md) gepflegt.
 
 ## 1. Ausgangslage und Ziel
 
@@ -16,7 +16,7 @@ Die vier Vorlesungsunterlagen verstehen Data Science Programming nicht primär a
 |---|---|---|
 | Programmiergrundlagen praktisch einsetzen | Python-Module, Klassen, Funktionen, Bedingungen, Iteration, Datei-I/O, HTTP-Clients und DataFrames bilden eine ausführbare Anwendung statt eines einmaligen Notebooks. | Quellcode unter `src/f1_pipeline/` und reproduzierbare Befehle in der `README.md` |
 | Automatisierungspotenzial erkennen und Arbeitsschritte bewerten | Meeting-Auswahl, Session-Discovery, zweckabhängige Endpoint-Planung, Ingestion, Validierung, Transformation und Manifestbildung laufen als zusammenhängender Job. Seltene fachliche Freigaben, etwa ein mehrdeutiges Circuit-Mapping, bleiben bewusst manuell. | Weekend-Orchestrator, Job-Service und Pipeline-Manifeste |
-| Datenmanagement mit Analyse und Entscheidung verbinden | Bronze-Snapshots und Silver-Facts versorgen Saisonübersicht, Replay, Pace-Auswertung und spätere Calculation Snapshots über dieselben geprüften Eingänge. | manifestgebundene Read Models und Input-Hashes |
+| Datenmanagement mit Analyse und Entscheidung verbinden | Bronze-Snapshots und Silver-Facts versorgen Saisonübersicht, Replay, Pace-Auswertung und versionierte Calculation Snapshots über dieselben geprüften Eingänge. | manifestgebundene Read Models und Input-Hashes |
 | Verständlichkeit und strukturierte Datenflüsse | Zuständigkeiten von Quellen, Pipeline, Race State, Berechnung und Darstellung sind getrennt; Datenfluss und zeitliche Freigabe werden grafisch dokumentiert. | Sequenzdiagramm in Abschnitt 2.4 und Zeitachsen in Abschnitt 4 |
 | Reproduzierbarkeit und Korrektheit | Unveränderliche Snapshots, SHA-256-Hashes, Schema- und Schlüsselprüfungen, versionierte Manifeste sowie deterministische Berechnungs-IDs identifizieren die Eingaben eines Ergebnisses. | Manifeste unter `data/curated/manifests/` und Verifikationsartefakte |
 | Robustheit und Fehlertoleranz | Quellenfehler bleiben isoliert, Abrufe besitzen Timeouts und begrenzte Retries, Schreibvorgänge sind atomar, und fehlende Werte werden nicht erfunden. | Status `available`, `partial`, `stale` und `unavailable` sowie dokumentierter Fehlerkontext |
@@ -43,7 +43,7 @@ Vor der Implementierung wurden die Leitfragen aus der Vorlesung auf den F1-Anwen
 | Welche Risiken bestehen? | Ausfälle, leere oder verspätete Antworten, Schemaänderungen, Duplikate, fehlende Runden, uneindeutige Identitäten, unterschiedliche Quellsemantik, Rate Limits und Zukunftswissen im Replay. |
 | Wie werden fehlerhafte oder fehlende Daten behandelt? | Pflichtfelder, Datentypen, Schlüssel, Wertebereiche und UTC-Zeiten werden geprüft. Fehlendes bleibt fehlend; unsichere Teilergebnisse erhalten einen expliziten Status und ersetzen keinen letzten gültigen Snapshot. |
 | Wie sieht die automatisierbare Lösung aus? | Auswahl → Discovery → Abruf → Bronze-Snapshot → Validierung → Silver-Transformation → Manifest → Read Model beziehungsweise Analyse. Jeder Schritt besitzt eine begrenzte Verantwortung. |
-| Wie werden Daten aktualisiert? | Wiederholte idempotente Jobs erzeugen neue unveränderliche Snapshots oder verwenden geprüfte vorhandene Daten. Dashboard-Intents und ein persistierter lokaler Scheduler führen Forecast-Slots sowie Sessionversuche bei `T+1 h` und `T+5 h` aus. |
+| Wie werden Daten aktualisiert? | Wiederholte idempotente Jobs erzeugen neue unveränderliche Snapshots oder verwenden geprüfte vorhandene Daten. Dashboard-Intents und ein persistierter lokaler Ereignis-Timer führen Forecast-Slots sowie Sessionversuche bei `T+1 h` und, nur nach unvollständigem Erstversuch, `T+5 h` aus. |
 
 Die bewusst einfachen Machbarkeitsnachweise sind erstens Session- und Endpoint-Abdeckung samt Qualitätsstatus, zweitens Kalender, Ergebnisse, Siege, Podien und Meisterschaftsstände, drittens Pace nach Fahrer und Reifenstint mit getrenntem OpenF1-/FastF1-Vergleich, viertens der zeitlich begrenzte Renn-Replay mit Race Control und Wetter sowie fünftens der Vergleich eines damals verfügbaren Forecasts mit späteren Beobachtungen. Diese Auswertungen prüfen Datensammlung und Automatisierung; sie setzen kein komplexes ML-Modell voraus.
 
@@ -70,11 +70,11 @@ Das Ziel ist nicht auf ein festes Rennformat beschränkt. Nach Auswahl eines Mee
 
 Die Pipeline speichert quellnahe Daten als Parquet, validiert Pflichtfelder, Schlüssel und UTC-Zeitstempel und liest geschriebene Dateien zur Kontrolle erneut ein. Erfolgreiche Snapshots bleiben erhalten, wenn ein späterer Abruf fehlschlägt. Fehler werden je Quelle und Endpoint isoliert dokumentiert.
 
-Die aktuelle Implementierung besitzt einen idempotenten, saisonparametrierten Orchestrator für Eventauswahl, kleine Core-Sessionloads, Replay- beziehungsweise Komplett-Erweiterungen, Silver-Transformation, Wikidata, lokale Streckengeometrie und getrennte Open-Meteo-Forecasts. Der Scheduler persistiert Forecast-Slots bei `T-24 h`, `T-6 h` und `T-1 h`, versucht Core-Daten bei `T+1 h` und wiederholt einen unvollständigen Lauf bei `T+5 h`. Automatisiert bedeutet dabei nicht live: OpenF1 wird nach Ende einer Session historisch abgefragt, solange kein kostenpflichtiger Live-Zugang verwendet wird.
+Die aktuelle Implementierung besitzt einen idempotenten, saisonparametrierten Orchestrator für Eventauswahl, kleine Core-Sessionloads, Replay- beziehungsweise Komplett-Erweiterungen, Silver-Transformation, Wikidata, lokale Streckengeometrie und getrennte Open-Meteo-Forecasts. Der Scheduler persistiert Forecast-Slots bei `T-24 h`, `T-6 h` und `T-1 h`, versucht Core-Daten bei `T+1 h` und plant `T+5 h` erst nach einem unvollständigen Erstversuch. Im Modus `--watch` schläft er ohne Intervall-Polling bis zum nächsten exakten Termin; alternativ kann ein System-Scheduler den Einzeldurchlauf zu diesen Zeiten starten. Automatisiert bedeutet dabei nicht live: OpenF1 wird nach Ende einer Session historisch abgefragt, solange kein kostenpflichtiger Live-Zugang verwendet wird.
 
 ```mermaid
 sequenceDiagram
-	participant Aufruf as Manueller Aufruf
+	participant Aufruf as Job-Service oder Scheduler
 	participant Orchestrator as Weekend-Orchestrator
 	participant Planner as Session-Planer
 	participant OpenF1
@@ -105,7 +105,7 @@ sequenceDiagram
 		end
 	end
 
-	opt Sessions, Runden und Positionen im Session-Manifest verfügbar
+	opt Runden und Location im Session-Manifest verfügbar
 		Orchestrator->>Geometry: Hashgeprüfte Snapshot-Referenzen übergeben
 		Geometry->>Ablage: Saisonale Centerline und Lineage-Manifest schreiben
 	end
@@ -271,7 +271,7 @@ FastF1 wird sessionzentriert geladen und lokal gecacht. Geprüft werden mindeste
 
 Der erste durchgängige Lauf verbindet OpenF1 `circuit_key=4` über ein manuell geprüftes Mapping mit Wikidata `Q171356`. Das Mapping liegt als versionierter Pipeline-Input in `config/reviewed_circuit_mappings.json`; Schema und Inhalts-Hash werden im Gesamtmanifest festgehalten. Für unbekannte Circuits existiert getrennt die gesperrt und atomar aktualisierte Auto-Registry unter `data/curated/registries/`. Nur genau ein Kandidat mit Name- oder Ortsevidenz, passendem Land, Rennstreckenbeschreibung und gültigem Earth-`P625` wird angenommen. Beide Registry-Hashes gehören zur Run-Identität.
 
-Open-Meteo liefert für den Akzeptanzfall den ECMWF-IFS-Lauf mit Initialisierung `2026-07-26T00:00:00Z`. Die ausgeführte Weekend-Weather-Pipeline speichert 168 stündliche Forecast-Zeilen, die vollständige Rohantwort, Requestparameter, Einheiten, Grid-Koordinaten, Zeitgrenzen und Hashes. Das konfigurierte `available_at=2026-07-26T06:00:00Z` ist eine konservative dokumentierte Latenzregel und kein Nachweis eines damaligen Abrufs. Für zukünftige Rennwochenenden führt der Scheduler eigenständige Forecast-Jobs ungefähr 24, 6 und 1 Stunde vor einer Session aus.
+Open-Meteo liefert für den Akzeptanzfall den ECMWF-IFS-Lauf mit Initialisierung `2026-07-26T00:00:00Z`. Die ausgeführte Weekend-Weather-Pipeline speichert 168 stündliche Forecast-Zeilen, die vollständige Rohantwort, Requestparameter, Einheiten, Grid-Koordinaten, Zeitgrenzen und Hashes. Das konfigurierte `available_at=2026-07-26T06:00:00Z` ist eine konservative dokumentierte Latenzregel und kein Nachweis eines damaligen Abrufs. Für zukünftige Rennwochenenden führt der Scheduler eigenständige Forecast-Jobs 24, 6 und 1 Stunde vor einer Session aus.
 
 Die Historical Forecast API bildet eine fortlaufende Reihe aus den ersten Stunden aufeinanderfolgender Modellläufe und eignet sich für Training und Vergleiche. Previous Runs dienen optional dem Vergleich fester Vorlaufzeiten. Historical Weather sowie Wetterdaten aus OpenF1 und FastF1 sind Beobachtungs- beziehungsweise Referenzdaten. Sie bewerten einen Forecast, ersetzen oder verändern ihn aber nicht rückwirkend.
 
