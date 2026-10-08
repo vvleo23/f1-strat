@@ -17,7 +17,7 @@ from f1_pipeline.temporal import TemporalCutError, cut_facts, decision_timestamp
 from f1_pipeline.weather import WeatherCutError, build_weather_cut
 
 FEATURE_VERSION = "qualifying_features_v1"
-CALCULATION_VERSION = "qualifying_baseline_v1"
+CALCULATION_VERSION = "qualifying_comparison_v2"
 SIMULATION_COUNT = 10_000
 READABLE_STATUSES = frozenset({"available", "partial", "stale"})
 
@@ -241,6 +241,129 @@ def _best_laps(
     best["track_temperature"] = weather["track_temperature"]
     best["weather_regime"] = weather["regime"]
     return best, spread
+
+
+def calculate_latest_one_lap_baseline(
+    sessions: list[SessionInput], decision_time: pd.Timestamp
+) -> pd.DataFrame:
+    eligible = [
+        session
+        for session in sessions
+        if session.session_type in {"practice", "sprint_qualifying"}
+    ]
+    if not eligible:
+        eligible = sessions
+    if not eligible:
+        return pd.DataFrame()
+    latest = max(eligible, key=lambda session: session.scheduled_start)
+    best, _ = _best_laps(latest, decision_time)
+    if best.empty:
+        return pd.DataFrame()
+    baseline = best[["driver_number", "lap_duration_seconds"]].copy()
+    baseline["driver_number"] = pd.to_numeric(
+        baseline["driver_number"], errors="coerce"
+    ).astype("Int64")
+    baseline = baseline.dropna(subset=["driver_number", "lap_duration_seconds"])
+    baseline = baseline.sort_values(
+        ["lap_duration_seconds", "driver_number"]
+    ).reset_index(drop=True)
+    baseline["baseline_position"] = pd.Series(
+        range(1, len(baseline) + 1), dtype="Int64"
+    )
+    leader = float(baseline["lap_duration_seconds"].min())
+    baseline["baseline_gap_seconds"] = baseline["lap_duration_seconds"] - leader
+    baseline["baseline_session_key"] = latest.session_key
+    return baseline.rename(
+        columns={"lap_duration_seconds": "baseline_lap_seconds"}
+    )
+
+
+def compare_prediction_models(
+    predictions: pd.DataFrame,
+    actual_results: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    comparison = predictions.copy()
+    actual = actual_results.copy()
+    if not {"driver_number", "position"}.issubset(actual.columns):
+        comparison["actual_position"] = pd.Series(
+            pd.NA, index=comparison.index, dtype="Int64"
+        )
+        return comparison, pd.DataFrame()
+    actual["driver_number"] = pd.to_numeric(
+        actual["driver_number"], errors="coerce"
+    ).astype("Int64")
+    actual["actual_position"] = pd.to_numeric(
+        actual["position"], errors="coerce"
+    ).astype("Int64")
+    actual = actual.dropna(subset=["driver_number", "actual_position"]).drop_duplicates(
+        "driver_number", keep="last"
+    )
+    comparison = comparison.merge(
+        actual[["driver_number", "actual_position"]],
+        on="driver_number",
+        how="left",
+    )
+    summaries: list[dict[str, Any]] = []
+    for label, column in (
+        ("Simple baseline", "baseline_position"),
+        ("Complex prediction", "predicted_position"),
+    ):
+        if column not in comparison.columns:
+            continue
+        valid = comparison.dropna(subset=[column, "actual_position"]).copy()
+        if valid.empty:
+            continue
+        valid[column] = pd.to_numeric(valid[column], errors="coerce")
+        valid["actual_position"] = pd.to_numeric(
+            valid["actual_position"], errors="coerce"
+        )
+        error_column = (
+            "baseline_position_error"
+            if column == "baseline_position"
+            else "complex_position_error"
+        )
+        comparison[error_column] = (
+            pd.to_numeric(comparison[column], errors="coerce")
+            - pd.to_numeric(comparison["actual_position"], errors="coerce")
+        ).abs()
+        predicted_top = set(
+            valid.loc[valid[column].le(5), "driver_number"].astype(int)
+        )
+        actual_top = set(
+            valid.loc[valid["actual_position"].le(5), "driver_number"].astype(int)
+        )
+        summaries.append(
+            {
+                "model": label,
+                "driver_count": len(valid),
+                "position_mae": float(
+                    (valid[column] - valid["actual_position"]).abs().mean()
+                ),
+                "spearman": float(
+                    valid[column].corr(valid["actual_position"], method="spearman")
+                ),
+                "top_5_overlap": (
+                    len(predicted_top & actual_top) / min(5, len(actual_top))
+                    if actual_top
+                    else math.nan
+                ),
+            }
+        )
+    if {
+        "baseline_position_error",
+        "complex_position_error",
+    }.issubset(comparison.columns):
+        baseline_error = comparison["baseline_position_error"]
+        complex_error = comparison["complex_position_error"]
+        comparison["closer_model"] = np.select(
+            [complex_error.lt(baseline_error), baseline_error.lt(complex_error)],
+            ["Complex", "Baseline"],
+            default="Tie",
+        )
+        comparison.loc[
+            baseline_error.isna() | complex_error.isna(), "closer_model"
+        ] = pd.NA
+    return comparison, pd.DataFrame(summaries)
 
 
 def _temperature_bin(source: Any, target: Any) -> int | None:
@@ -826,6 +949,23 @@ def build_qualifying_prediction(
         calibration=calibration,
         calculation_id=calculation_id,
     )
+    baseline = calculate_latest_one_lap_baseline(session_inputs, decision_time)
+    combined_rows = (
+        result.rows.merge(baseline, on="driver_number", how="left")
+        if not result.rows.empty and not baseline.empty
+        else result.rows.copy()
+    )
+    diagnostics = dict(result.diagnostics)
+    diagnostics["baseline"] = {
+        "model": "latest_one_lap",
+        "source_session_key": (
+            int(baseline["baseline_session_key"].iloc[0])
+            if not baseline.empty
+            else None
+        ),
+        "driver_rows": len(baseline),
+    }
+    result = PredictionResult(combined_rows, result.status, diagnostics)
     if input_errors:
         diagnostics = dict(result.diagnostics)
         diagnostics["input_errors"] = input_errors

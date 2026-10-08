@@ -49,7 +49,7 @@ flowchart LR
 | Historical event replay | Chronological race state for historical visualization | Pipeline and Dashboard V1 | Implemented with synchronized Re-Live panels and a strict prediction boundary |
 | Weather pipeline | Immutable Open-Meteo forecasts plus separate OpenF1/FastF1 observations | Pipeline MVP | Generic circuit-reference path implemented; forecast coverage depends on provider availability |
 | Season overview | Calendar, sessions, driver/team standings, wins, and podium counts | Dashboard V1 | Implemented from curated OpenF1 facts |
-| Qualifying calculation | Full predicted classification plus per-driver Top-15/Top-10/Top-5 probabilities | Later analysis | Transparent baseline and first manifest-backed walk-forward runner implemented; wider event and forecast coverage is still required |
+| Qualifying calculation | Full predicted classification plus per-driver Top-15/Top-10/Top-5 probabilities | Later analysis | Latest-session one-lap baseline and complex prediction are shown together; completed sessions add actual positions and comparative metrics |
 | Race calculation | Online tyre and pit-lap recommendation from the current replay state, including projected pit exit | Post-V1 analysis | Transparent rule baseline and manifest-backed per-driver snapshots implemented; wider backtesting remains required |
 | Dashboard | Small read-only view of curated data, results, standings, replay, weather, Race Control, and strategy | Dashboard V1 plus post-V1 consumers | Season overview and single-screen Re-Live with strategy panel implemented |
 

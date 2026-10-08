@@ -8,7 +8,9 @@ from f1_pipeline.analysis.qualifying_prediction import (
     Calibration,
     PredictionParameters,
     SessionInput,
+    calculate_latest_one_lap_baseline,
     calculate_prediction,
+    compare_prediction_models,
 )
 
 
@@ -219,6 +221,42 @@ class QualifyingPredictionTest(unittest.TestCase):
 
         self.assertEqual(int(equal.rows.iloc[0]["driver_number"]), 16)
         self.assertEqual(int(latest.rows.iloc[0]["driver_number"]), 1)
+
+    def test_latest_lap_baseline_and_actual_comparison_are_separate(self) -> None:
+        sessions = [
+            self.session(1, "2026-05-01T10:00:00Z", wet=False, reverse=False),
+            self.session(2, "2026-05-01T12:00:00Z", wet=False, reverse=True),
+        ]
+        baseline = calculate_latest_one_lap_baseline(
+            sessions, pd.Timestamp("2026-05-02T13:00:00Z")
+        )
+        self.assertEqual(int(baseline.iloc[0]["driver_number"]), 16)
+        self.assertEqual(int(baseline.iloc[0]["baseline_position"]), 1)
+        predictions = baseline.merge(
+            pd.DataFrame(
+                {
+                    "driver_number": list(range(1, 17)),
+                    "predicted_position": list(range(1, 17)),
+                }
+            ),
+            on="driver_number",
+        )
+        actual = pd.DataFrame(
+            {
+                "driver_number": list(range(1, 17)),
+                "position": list(range(1, 17)),
+            }
+        )
+        comparison, summary = compare_prediction_models(predictions, actual)
+        self.assertEqual(
+            float(
+                summary.loc[
+                    summary["model"].eq("Complex prediction"), "position_mae"
+                ].iloc[0]
+            ),
+            0.0,
+        )
+        self.assertTrue(comparison["complex_position_error"].eq(0).all())
 
 
 if __name__ == "__main__":
