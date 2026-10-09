@@ -1,3 +1,7 @@
+<!--
+AI assistance: OpenAI GPT-5.6 Sol
+Scope: Drafting source documentation for circuit identity and coordinate lookup; English domain terminology.
+-->
 # Wikidata
 
 **Status:** Reviewed reference loading and uniquely validated automatic circuit resolution are implemented.

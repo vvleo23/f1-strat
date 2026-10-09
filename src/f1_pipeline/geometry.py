@@ -1,3 +1,5 @@
+# AI assistance: OpenAI GPT-5.6 Sol and GPT-6.1 Sol
+# Scope: Local centerline reconstruction from OpenF1 vehicle-location coordinates.
 """Build and load reusable local circuit geometry from OpenF1 locations."""
 
 from __future__ import annotations

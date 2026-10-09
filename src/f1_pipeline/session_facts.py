@@ -1,3 +1,5 @@
+# AI assistance: OpenAI GPT-5.6 Sol
+# Scope: English domain terminology for canonical session facts and fields.
 from __future__ import annotations
 
 import hashlib

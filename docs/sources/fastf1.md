@@ -1,3 +1,7 @@
+<!--
+AI assistance: OpenAI GPT-5.6 Sol
+Scope: Drafting and structuring source and interface documentation; English domain terminology.
+-->
 # FastF1
 
 **Status:** Partly implemented as a Hungary 2026 race cross-check; weekend session loading is planned.

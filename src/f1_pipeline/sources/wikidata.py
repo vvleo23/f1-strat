@@ -1,3 +1,5 @@
+# AI assistance: OpenAI GPT-5.6 Sol
+# Scope: Circuit candidate search and validation of identities and geographic coordinates.
 from __future__ import annotations
 
 import json

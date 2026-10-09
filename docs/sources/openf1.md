@@ -1,3 +1,7 @@
+<!--
+AI assistance: OpenAI GPT-5.6 Sol and GPT-6.1 Sol 
+Scope: Drafting and structuring source and interface documentation; English domain terminology.
+-->
 # OpenF1
 
 **Status:** Season-parameterized discovery, Core session ingestion, replay/full extensions, results, standings, automatic local geometry, and bounded post-session scheduling are implemented.

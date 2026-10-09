@@ -1,3 +1,5 @@
+# AI assistance: OpenAI GPT-5.6 Sol; Anthropic Claude
+# Scope: Source interfaces; contribution to source error/empty-response handling.
 from __future__ import annotations
 
 import json

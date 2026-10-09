@@ -21,6 +21,20 @@ Sources used:
 
 These analyses verify the data flow and expose limitations. Broader model validation remains open.
 
+## AI assistance
+
+The following areas received AI assistance. File headers identify the supported scope rather than declaring every line AI-generated.
+
+| Area | Files | Disclosed assistance |
+|---|---|---|
+| API, source, and interface documentation | [Source cards](docs/sources/) | Drafting and structuring source roles, access, interface contracts, and limitations. Original provider references remain the factual sources. |
+| Master data | [master_data.py](src/f1_pipeline/master_data.py) | Implementing season dimensions, identity handling, and data preparation from OpenF1. |
+| Circuit layout | [geometry.py](src/f1_pipeline/geometry.py) | Developing local centerline reconstruction from OpenF1 vehicle-location coordinates. |
+| Wikidata coordinates | [wikidata.py](src/f1_pipeline/sources/wikidata.py), [weekend_weather_pipeline.py](src/f1_pipeline/sources/weekend_weather_pipeline.py) | Circuit candidate search, identity and coordinate validation, and pipeline integration. Coordinates remain sourced from Wikidata evidence. |
+| English domain terminology and ubiquitous language | [master_data.py](src/f1_pipeline/master_data.py), [session_facts.py](src/f1_pipeline/session_facts.py), and source cards | Naming domain entities, facts, fields, and documentation terms. |
+| README | [README.md](README.md) | English wording, translation, structure, and documentation updates. |
+| Contributions to source interfaces | [openf1.py](src/f1_pipeline/sources/openf1.py), [openf1_weekend.py](src/f1_pipeline/sources/openf1_weekend.py), [weekend_weather_pipeline.py](src/f1_pipeline/sources/weekend_weather_pipeline.py) | Contributions by `twernicke03` to source error/empty-response handling and shared-write protection; commit `0460c6d`. README documentation contribution: `d6bb609`. |
+
 ## Setup and start
 
 Install Python 3.14 and download or clone this repository.
@@ -95,4 +109,4 @@ Open [localhost:8501](http://localhost:8501). A fresh checkout starts with the b
 
 Optional automatic loading uses a third terminal with the same environment: `python -m f1_pipeline.scheduler --season 2026 --watch --refresh-calendar`. It waits for known event times. Details are in the [scheduling section](docs/schriftliche_abgabe.md#45-jobsteuerung-und-aktualisierung).
 
-### Step 5: profit
+### Step 5: profit!

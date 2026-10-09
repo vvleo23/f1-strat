@@ -1,3 +1,5 @@
+# AI assistance: OpenAI GPT-5.6 Sol
+# Scope: Master-data preparation, season dimensions, and English domain terminology.
 """Load a Formula 1 season's master data from OpenF1."""
 
 from __future__ import annotations

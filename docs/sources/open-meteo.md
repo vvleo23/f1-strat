@@ -1,3 +1,7 @@
+<!--
+AI assistance: OpenAI GPT-5.6 Sol and GPT-6.1 Sol 
+Scope: Drafting and structuring source and interface documentation; English domain terminology.
+-->
 # Open-Meteo
 
 **Status:** Historical ECMWF IFS Single-Run selection, Hungary 2026 persistence, and scheduled `T-24 h`/`T-6 h`/`T-1 h` capture are implemented.

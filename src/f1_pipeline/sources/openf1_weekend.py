@@ -1,3 +1,5 @@
+# AI assistance: OpenAI GPT-5.6 Sol and GPT-6.1 Sol; Anthropic Claude
+# Scope: Session ingestion interfaces; Claude contribution to optional/empty endpoint handling.
 from __future__ import annotations
 
 import hashlib
