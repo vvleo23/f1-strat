@@ -18,6 +18,7 @@ from f1_pipeline.job_runner import (
     read_job_status,
     run_weekend_job,
 )
+from f1_pipeline.persistence import file_lock_active
 
 MAX_REQUEST_BYTES = 64 * 1024
 
@@ -77,7 +78,11 @@ def handler_class(job_dir: Path) -> type[BaseHTTPRequestHandler]:
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
             existing = read_job_status(identifier, job_dir)
-            if existing and existing.get("status") == "running":
+            if (
+                existing
+                and existing.get("status") == "running"
+                and file_lock_active(job_dir / f"job_{identifier}")
+            ):
                 self._json(HTTPStatus.ACCEPTED, existing)
                 return
             Thread(target=_run_job, args=(intent, job_dir), daemon=True).start()

@@ -8,8 +8,6 @@ import argparse
 import hashlib
 import json
 import math
-import os
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from f1_pipeline.data_validation import DataValidationError, validate_frame
-from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
+from f1_pipeline.persistence import atomic_json, atomic_parquet, file_lock, sha256
 from f1_pipeline.settings import CURATED_DATA_DIR, PROJECT_ROOT, RAW_DATA_DIR
 
 GEOMETRY_COLUMNS = [
@@ -520,18 +518,7 @@ def write_geometry_record(
         record: dict[str, Any], path: Path = GEOMETRY_PATH
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(f"{path.suffix}.lock")
-    deadline = time.monotonic() + 30
-    descriptor: int | None = None
-    while descriptor is None:
-        try:
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            if time.monotonic() >= deadline:
-                raise TrackGeometryError("Geometry dimension is locked by another pipeline run.")
-            time.sleep(0.05)
-    os.close(descriptor)
-    try:
+    with file_lock(path, timeout_seconds=30.0):
         existing = pd.DataFrame(columns=GEOMETRY_COLUMNS)
         if path.exists():
             try:
@@ -553,8 +540,6 @@ def write_geometry_record(
         frame = frame[GEOMETRY_COLUMNS]
         _validate_geometry_frame(frame)
         atomic_parquet(frame, path)
-    finally:
-        lock_path.unlink(missing_ok=True)
     return path
 
 

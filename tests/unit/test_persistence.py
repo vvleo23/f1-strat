@@ -3,14 +3,43 @@ from __future__ import annotations
 import tempfile
 import threading
 import os
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from f1_pipeline.persistence import file_lock
+from f1_pipeline.persistence import file_lock, file_lock_active
 
 
 class FileLockTest(unittest.TestCase):
+    def test_recovers_lock_after_owner_process_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "shared.parquet"
+            subprocess.run(
+                [sys.executable, "-c", (
+                    "import os, sys; from pathlib import Path; "
+                    "from f1_pipeline.persistence import file_lock; "
+                    "lock = file_lock(Path(sys.argv[1])); lock.__enter__(); os._exit(0)"
+                ), str(target)],
+                check=True, timeout=15,
+            )
+            self.assertTrue(target.with_suffix(".parquet.lock").exists())
+            self.assertFalse(file_lock_active(target))
+            with file_lock(target, timeout_seconds=1.0):
+                self.assertTrue(file_lock_active(target))
+            self.assertFalse(target.with_suffix(".parquet.lock").exists())
+
+    def test_unknown_legacy_lock_is_not_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "shared.parquet"
+            marker = target.with_suffix(".parquet.lock")
+            marker.write_text("", encoding="utf-8")
+            with self.assertRaises(TimeoutError):
+                with file_lock(target, timeout_seconds=0.0):
+                    self.fail("An unidentified lock must remain protected")
+            self.assertTrue(marker.exists())
+
     def test_serializes_concurrent_critical_sections(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "shared.parquet"

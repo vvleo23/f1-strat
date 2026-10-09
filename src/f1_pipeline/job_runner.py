@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import hashlib
 import json
-import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -123,12 +123,11 @@ def run_weekend_job(
     if existing and existing.get("status") in {"available", "stale"} and not normalized.refresh:
         return existing
     job_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = job_dir / f"job_{identifier}.lock"
+    lock_context = ExitStack()
     try:
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as exc:
+        lock_context.enter_context(file_lock(job_dir / f"job_{identifier}", timeout_seconds=0.0))
+    except TimeoutError as exc:
         raise JobAlreadyRunningError(f"Job {identifier} is already running.") from exc
-    os.close(descriptor)
     intent_payload = asdict(normalized)
     intent_payload["session_keys"] = list(normalized.session_keys)
     running = {
@@ -137,10 +136,11 @@ def run_weekend_job(
         "status": "running",
         "intent": intent_payload,
     }
-    atomic_json(running, status_path)
     manifest = None
     manifest_path = None
+    completed = running
     try:
+        atomic_json(running, status_path)
         with file_lock(job_dir / "source_pipeline", timeout_seconds=900.0):
             manifest, manifest_path = pipeline_runner(
                 season=normalized.season,
@@ -193,8 +193,10 @@ def run_weekend_job(
             completed["pipeline_manifest_path"] = str(manifest_path)
             completed["pipeline_run_id"] = manifest.get("run_id")
     finally:
-        lock_path.unlink(missing_ok=True)
-    atomic_json(completed, status_path)
+        try:
+            atomic_json(completed, status_path)
+        finally:
+            lock_context.close()
     return completed
 
 

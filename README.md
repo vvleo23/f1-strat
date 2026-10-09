@@ -21,6 +21,18 @@ Sources used:
 
 These analyses verify the data flow and expose limitations. Broader model validation remains open.
 
+## Scheduling and reliability
+
+Run `python -m f1_pipeline.scheduler --season 2026 --watch` in a separate terminal. It waits for known event times and refreshes the calendar at startup and each wake-up. A failed refresh records its error and falls back to the existing local calendar when available. Changes that move an event before the next known wake-up still require a restart with `--refresh-calendar`.
+
+| Trigger | Action |
+|---|---|
+| Session start −24 h, −6 h, −1 h | Attempt a separate forecast capture. |
+| Planned session end +1 h | Attempt Core ingestion for that session. |
+| Planned session end +5 h | Retry only after an incomplete or failed first attempt. |
+
+The retry is five hours after session end, four hours after the first scheduled attempt. The one-hour delay provides a buffer beyond [OpenF1's live window](https://openf1.org/#access), which ends 30 minutes after a session. Delays, outdated calendar data, or another live session can still prevent access; these times do not guarantee source availability. Automatic Core loads exclude high-volume replay/location data.
+
 ## AI assistance
 
 The following areas received AI assistance. File headers identify the supported scope rather than declaring every line AI-generated.
@@ -40,6 +52,8 @@ The following areas received AI assistance. File headers identify the supported 
 Install Python 3.14 and download or clone this repository.
 
 ### Step 1: Install dependencies
+
+`requirements.txt` pins the directly used packages to the versions tested with Python 3.14. Transitive dependencies are resolved by pip and are not fully locked; FastF1 installs Matplotlib as a dependency.
 
 Windows PowerShell:
 
@@ -107,6 +121,6 @@ If PowerShell blocks activation, use `.\.venv\Scripts\python.exe` instead of `py
 
 Open [localhost:8501](http://localhost:8501). A fresh checkout starts with the bundled Hungaroring demo. Select a weekend or session and use its download action. The complete-weekend button loads all completed sessions plus Sprint/Race replay data.
 
-Optional automatic loading uses a third terminal with the same environment: `python -m f1_pipeline.scheduler --season 2026 --watch --refresh-calendar`. It waits for known event times. Details are in the [scheduling section](docs/schriftliche_abgabe.md#45-jobsteuerung-und-aktualisierung).
+Optional automatic loading uses a third terminal with the same environment: `python -m f1_pipeline.scheduler --season 2026 --watch --refresh-calendar`. See [scheduling and reliability](#scheduling-and-reliability) for timing, retries, and restart limits.
 
 ### Step 5: profit!

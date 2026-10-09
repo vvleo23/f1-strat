@@ -354,6 +354,20 @@ def _snapshot_path(
     return target
 
 
+def _lap_coverage(frame: pd.DataFrame) -> dict[str, Any]:
+    missing: dict[str, list[int]] = {}
+    for driver, laps in frame.groupby("driver_number"):
+        values = pd.to_numeric(laps["lap_number"])
+        if not (values.between(1, 1000) & values.eq(values.round())).all():
+            raise OpenF1WeekendError("Lap numbers must be integers between 1 and 1000.")
+        numbers = sorted(set(values.astype(int)))
+        if numbers:
+            gaps = sorted(set(range(numbers[0], numbers[-1] + 1)).difference(numbers))
+            if gaps:
+                missing[str(driver)] = gaps
+    return {"status": "partial" if missing else "available", "missing_laps": missing}
+
+
 def _cached_snapshot(
         raw_dir: Path, session_key: int, endpoint: str
 ) -> tuple[pd.DataFrame, Path] | None:
@@ -368,6 +382,8 @@ def _cached_snapshot(
             if column not in frame.columns:
                 frame[column] = pd.Series(dtype="object")
     _validate_source_frame(endpoint, frame, session_key)
+    if endpoint == "laps" and _lap_coverage(frame)["status"] == "partial":
+        return None
     snapshot = _snapshot_path(raw_dir, session_key, endpoint, frame)
     return frame, snapshot
 
@@ -433,19 +449,23 @@ def _load_endpoint(
             else pd.DataFrame(payload),
         )
     _validate_source_frame(endpoint, frame, session_key)
+    coverage = _lap_coverage(frame) if endpoint == "laps" else None
+    status = coverage["status"] if coverage is not None else "available"
     snapshot = _snapshot_path(raw_dir, session_key, endpoint, frame)
     latest = session_cache_path(session_key, endpoint)
     if raw_dir != RAW_DATA_DIR:
         latest = raw_dir / latest.name
-    write_latest_parquet(frame, latest)
+    if status == "available":
+        write_latest_parquet(frame, latest)
     return frame, {
-        "status": "available",
+        "status": status,
         "fetched": True,
         "row_count": len(frame),
         "raw_path": _relative(snapshot),
         "raw_sha256": sha256(snapshot),
         "retrieved_at": retrieved_at.isoformat(),
         "empty": frame.empty,
+        **({"coverage": coverage} if coverage is not None else {}),
     }
 
 
@@ -465,6 +485,8 @@ def _session_status(
         for name in optional
     )
     if optional_failed:
+        return "partial"
+    if any(result["status"] == "partial" for result in endpoints.values()):
         return "partial"
     if all(result["status"] == "stale" for result in endpoints.values()):
         return "stale"
@@ -543,6 +565,7 @@ def ingest_session(
     status = _session_status(required, optional, endpoint_results)
     identity = json.dumps(
         {
+            "coverage_version": 1,
             "session_key": session_key,
             "endpoints": {
                 name: {

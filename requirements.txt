@@ -1,13 +1,10 @@
-fastf1
-numpy
-pandas
-requests
-urllib3
-matplotlib
-seaborn
-plotly
-streamlit
-pyarrow
-python-dotenv
-truststore
+fastf1==3.8.3
+numpy==2.5.2
+pandas==2.3.3
+requests==2.34.2
+urllib3==2.7.0
+plotly==7.0.0
+streamlit==1.62.0
+pyarrow==25.0.1
+truststore==0.10.4
 

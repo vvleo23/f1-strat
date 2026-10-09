@@ -38,6 +38,10 @@ OpenF1 `circuit_key` is the stable join to a reviewed or uniquely auto-verified 
 
 Historical jobs therefore avoid relying on anonymous access during live windows. Scheduled Core ingestion runs at `T+1 h` and retries incomplete sessions at `T+5 h`. Existing valid endpoint snapshots are reused during the retry. Authentication and live access are outside Pipeline and Dashboard V1.
 
+Both offsets are relative to the planned session end, so the second scheduled attempt is four hours after the first. The one-hour buffer exceeds the documented 30-minute post-session live window, but delayed sessions or another live session can still block requests. Watch mode refreshes the calendar at each known wake-up and records fallback to a local calendar if refresh fails. It does not continuously track schedule changes.
+
+Lap ingestion checks internal lap-number gaps per driver. Missing numbers are retained as `coverage.missing_laps` in the endpoint manifest and mark the session `partial`. Gapped caches are refetched on a later ingestion attempt; a partial response is preserved as an immutable snapshot without replacing a complete latest cache. This is not a complete driver or race-distance coverage check. Lap numbers must be positive integers and are capped at 1,000 as a defensive validation limit for this application's session scope.
+
 ## Verification
 
 `f1_pipeline.sources.weekend_weather_pipeline` discovers and ingests Practice 1 (`11335`), Practice 2 (`11336`), Practice 3 (`11337`), Qualifying (`11338`), and Race (`11342`) instead of deriving sequential keys. Each applicable endpoint is checked independently for response shape, required fields, session identity, UTC timestamps, duplicate business keys, and Parquet read-after-write integrity.

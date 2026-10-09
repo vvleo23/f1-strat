@@ -1,11 +1,9 @@
-# AI assistance: OpenAI GPT-5.6 Sol
+# AI assistance: OpenAI GPT-5.6 Sol and GPT-6.1 Sol
 # Scope: Circuit candidate search and validation of identities and geographic coordinates.
 from __future__ import annotations
 
 import json
-import os
 import re
-import time
 import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -18,7 +16,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from f1_pipeline.persistence import atomic_json, sha256
+from f1_pipeline.persistence import atomic_json, file_lock, sha256
 from f1_pipeline.settings import CURATED_DATA_DIR, PROJECT_ROOT, RAW_DATA_DIR
 
 API_URL = "https://www.wikidata.org/w/api.php"
@@ -174,18 +172,7 @@ def _auto_registry(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
 
 def _write_auto_mapping(record: dict[str, Any], path: Path) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(f"{path.suffix}.lock")
-    deadline = time.monotonic() + 10
-    descriptor: int | None = None
-    while descriptor is None:
-        try:
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            if time.monotonic() >= deadline:
-                raise WikidataError("Automatic circuit mapping is locked by another pipeline run.")
-            time.sleep(0.05)
-    os.close(descriptor)
-    try:
+    with file_lock(path, timeout_seconds=10.0):
         records, _ = _auto_registry(path)
         records = [
             existing
@@ -198,8 +185,6 @@ def _write_auto_mapping(record: dict[str, Any], path: Path) -> dict[str, Any]:
             {"schema_version": AUTO_MAPPING_SCHEMA_VERSION, "mappings": records},
             path,
         )
-    finally:
-        lock_path.unlink(missing_ok=True)
     _, provenance = _auto_registry(path)
     return provenance
 

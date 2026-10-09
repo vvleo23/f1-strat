@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pandas as pd
 
-from f1_pipeline.persistence import sha256
+from f1_pipeline.persistence import atomic_parquet, sha256
 from f1_pipeline.sources.openf1_weekend import (
     ALLOW_EMPTY,
     EMPTY_ON_404,
@@ -20,6 +20,45 @@ from f1_pipeline.sources.openf1_weekend import (
 
 
 class OpenF1WeekendTest(unittest.TestCase):
+    def test_lap_gaps_trigger_refetch_and_do_not_replace_complete_cache(self) -> None:
+        complete = [
+            {"session_key": 42, "driver_number": 1, "lap_number": number,
+             "date_start": f"2026-07-26T13:0{number}:00Z", "lap_duration": 60.0}
+            for number in (1, 2, 3)
+        ]
+        gaps = [complete[0], complete[2]]
+        plan = {
+            "session_id": "openf1:session:42", "source_session_key": 42,
+            "normalized_session_type": "race", "required_endpoints": ["laps"],
+            "optional_endpoints": [], "skipped_endpoints": [],
+        }
+        client = Mock()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cache = root / "raw/openf1_42_laps.parquet"
+            atomic_parquet(pd.DataFrame(gaps), cache)
+            client.get_json.return_value = gaps
+            partial = ingest_session(
+                plan, client=client, refresh=False, raw_dir=root / "raw", curated_dir=root / "curated",
+            )
+            self.assertEqual(partial["status"], "partial")
+            self.assertEqual(partial["endpoints"]["laps"]["coverage"]["missing_laps"], {"1": [2]})
+            self.assertEqual(client.get_json.call_count, 1)
+
+            client.get_json.return_value = complete
+            recovered = ingest_session(
+                plan, client=client, refresh=False, raw_dir=root / "raw", curated_dir=root / "curated",
+            )
+            self.assertEqual(recovered["status"], "available")
+            valid_hash = sha256(cache)
+            client.get_json.return_value = gaps
+            rejected = ingest_session(
+                plan, client=client, refresh=True, raw_dir=root / "raw", curated_dir=root / "curated",
+            )
+            self.assertEqual(rejected["status"], "partial")
+            self.assertEqual(sha256(cache), valid_hash)
+            self.assertTrue(Path(rejected["endpoints"]["laps"]["raw_path"]).is_file())
+
     def test_plans_regular_and_sprint_sessions_without_location(self) -> None:
         sessions = [
             {
