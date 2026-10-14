@@ -64,7 +64,7 @@ CORE_BY_SESSION_TYPE = {
 }
 CORE_OPTIONAL_BY_SESSION_TYPE = {
     "practice": frozenset(),
-    "qualifying": frozenset(),
+    "qualifying": frozenset({"starting_grid"}),
     "sprint_qualifying": frozenset(),
     "sprint": frozenset({"championship_drivers", "championship_teams"}),
     "race": frozenset(
@@ -77,11 +77,6 @@ CORE_OPTIONAL_BY_SESSION_TYPE = {
 REPLAY_REQUIRED = frozenset({"position", "location"})
 REPLAY_OPTIONAL = frozenset({"intervals", "pit", "race_control"})
 ALLOW_EMPTY = frozenset({"intervals", "pit", "race_control", "starting_grid"})
-# OpenF1 returns HTTP 404 (not an empty JSON array) for these endpoints when
-# there is nothing to report, mirroring the already-documented `intervals`
-# 404 for non-applicable session types. `starting_grid` was observed to 404
-# for every checked race session (2025 and 2026); treat that the same as a
-# legitimate empty response instead of an ingestion failure.
 EMPTY_ON_404 = frozenset({"starting_grid"})
 REQUIRED_COLUMNS = {
     "sessions": {"session_key", "meeting_key", "session_name", "date_start"},
@@ -294,8 +289,6 @@ def plan_weekend_sessions(
             if normalized_type in {"sprint", "race"}:
                 required = required | REPLAY_REQUIRED
                 optional = optional | REPLAY_OPTIONAL
-            if normalized_type == "race":
-                optional = optional | {"starting_grid"}
         elif purpose == "race_strategy" and normalized_type in {"sprint", "race"}:
             required = required | REPLAY_REQUIRED
             optional = optional | REPLAY_OPTIONAL

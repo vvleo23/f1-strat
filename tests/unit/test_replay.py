@@ -257,6 +257,17 @@ class CircleOfDoomTest(unittest.TestCase):
             progress["track_progress"].tolist(), [0.0, 0.5, 0.0, 0.5, 0.0]
         )
 
+    def test_gap_reconstruction_does_not_bridge_missing_predecessor_gap(self) -> None:
+        rows = pd.DataFrame([
+            {"driver_number": 1, "position": 1, "gap_to_leader": 0, "interval": 0},
+            {"driver_number": 2, "position": 2, "gap_to_leader": None, "interval": None},
+            {"driver_number": 3, "position": 3, "gap_to_leader": None, "interval": 2},
+        ])
+
+        result = reconstruct_absolute_gaps(rows, reference_lap_time=100)
+
+        self.assertTrue(pd.isna(result[2]["absolute_gap"]))
+
     def test_location_progress_keeps_moving_across_missing_lap_number(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-08-23T13:00:00Z"))
         laps = self._lap_starts(start, [(0, 1), (4, 2), (12, 4), (16, 5)])
@@ -478,6 +489,50 @@ class CircleOfDoomTest(unittest.TestCase):
             {"UNAVAILABLE"},
         )
         self.assertIsNone(final.projection)
+
+    def test_start_keeps_drivers_before_first_gap_and_position_updates(self) -> None:
+        start = pd.Timestamp("2026-07-19T13:00:00Z")
+        datasets = self._datasets(start, start + timedelta(seconds=120))
+        datasets["intervals"]["date"] += timedelta(seconds=20)
+        datasets["position"]["date"] += timedelta(seconds=20)
+
+        replay = self._replay(datasets)
+
+        self.assertEqual({car.driver_number for car in replay.frames[0].cars}, {1, 2, 3})
+        self.assertEqual({car.displayed_gap for car in replay.frames[0].cars}, {"UNAVAILABLE"})
+        self.assertIsNone(replay.frames[0].projection)
+
+    def test_start_positions_share_reference_before_start_line_crossing(self) -> None:
+        start = pd.Timestamp("2026-07-19T13:00:00Z")
+        laps = pd.DataFrame([
+            {"driver_number": driver, "lap_number": lap,
+             "date_start": start + timedelta(seconds=seconds)}
+            for driver, starts in [(1, [(0, 1), (10, 2), (20, 3)]),
+                                   (2, [(2, 1), (12, 2), (22, 3)])]
+            for seconds, lap in starts
+        ])
+        locations = pd.DataFrame([
+            {"driver_number": driver, "date": start + timedelta(seconds=seconds),
+             "x": x, "y": y, "z": 0}
+            for driver, samples in [
+                (1, [(0, 0, 0), (2, 8, 0), (3, 10, 0), (5, 10, 10),
+                     (8, 0, 10), (10, 0, 0), (12, 10, 0), (15, 10, 10),
+                     (18, 0, 10), (20, 0, 0)]),
+                (2, [(0, 0, 2), (1, 0, 1), (2, 0, 0), (3, 10, 0),
+                     (6, 10, 10), (9, 0, 10), (12, 0, 0),
+                     (14, 10, 0), (17, 10, 10), (20, 0, 10), (22, 0, 0)]),
+            ]
+            for seconds, x, y in samples
+        ])
+
+        progress = build_location_progress(locations, laps, start)
+        follower = progress[progress.driver_number.eq(2)].set_index("location_at")
+
+        self.assertAlmostEqual(follower.loc[start, "track_progress"], 0.95)
+        self.assertEqual(follower.loc[start, "lap_number_from_location"], 0)
+        self.assertAlmostEqual(follower.loc[start + timedelta(seconds=2), "track_progress"], 0)
+        same_position = progress[progress.location_at.eq(start + timedelta(seconds=3))]
+        self.assertEqual(same_position.track_progress.tolist(), [0.25, 0.25])
 
     def test_neutralized_status_suppresses_optional_pit_projection(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))

@@ -16,7 +16,7 @@ Scope: Drafting and structuring source and interface documentation; English doma
 | `drivers` | number, acronym, team, colour | Driver and team dimensions |
 | `laps`, `intervals`, `position` | lap timing, gaps, positions | Point-in-time race state |
 | `pit`, `stints` | stops, compounds, tyre age | Observed strategy |
-| `starting_grid` | official race grid and qualifying lap duration | Grid-to-finish comparison |
+| `starting_grid` | official race grid and qualifying lap duration, queried with the Qualifying session key | Grid-to-finish comparison, joined to Race by meeting |
 | `weather` | timestamped measurements | Session-weather observations |
 | `race_control` | flags, categories, messages | Replay and track status |
 | `location` | timestamped `x`, `y`, `z` | Vehicle movement and local centerline |
@@ -24,7 +24,7 @@ Scope: Drafting and structuring source and interface documentation; English doma
 
 OpenF1 is the primary source for meeting/session discovery and the replay timeline. One shared transport and Bronze path convention serve master data, weekend ingestion, replay, and verification. The pipeline discovers every advertised session, including sprint formats, before selecting sessions by purpose and `decision_time` and then selecting endpoints by session type. FastF1 overlap is retained only as a separate cross-check.
 
-The `weekend` Core profile loads drivers, laps, stints, weather, and results where applicable. Sprint and Race also attempt championship standings. `replay` adds position, interval, pit, Race Control, and high-volume `location`; `weekend_complete_v1` applies that extension to Sprint and Race and attempts the official race grid. When one session manifest contains usable lap and location snapshots, the orchestrator hash-checks those exact immutable inputs and builds a local centerline automatically.
+The `weekend` Core profile loads drivers, laps, stints, weather, and results where applicable. Qualifying also attempts the official race grid. Sprint and Race also attempt championship standings. `replay` adds position, interval, pit, Race Control, and high-volume `location`; `weekend_complete_v1` applies that extension to Sprint and Race. When one session manifest contains usable lap and location snapshots, the orchestrator hash-checks those exact immutable inputs and builds a local centerline automatically.
 
 OpenF1 `circuit_key` is the stable join to a reviewed or uniquely auto-verified Wikidata identity. OpenF1 provides the source identity but not the WGS84 weather-reference coordinate.
 

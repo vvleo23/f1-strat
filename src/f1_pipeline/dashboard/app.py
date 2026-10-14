@@ -27,6 +27,7 @@ from f1_pipeline.dashboard.read_models import (
     load_qualifying_results,
     load_season_catalog,
     load_season_results,
+    load_starting_grids,
     load_standings_history,
     load_session_bundle,
     load_session_data_states,
@@ -77,6 +78,8 @@ def qualifying_results_for(season: int) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def race_endpoint_frames_for(season: int, endpoint: str) -> pd.DataFrame:
     catalog = catalog_for(season)
+    if endpoint == "starting_grid":
+        return load_starting_grids(catalog)
     races = catalog.sessions[
         catalog.sessions["status"].eq("completed")
         & catalog.sessions["session_name"].astype(str).str.casefold().eq("race")
@@ -473,6 +476,16 @@ def _job_payload(
 ) -> dict[str, Any]:
     session_key = source_session_key(session["session_id"])
     requires_catalog_refresh = _session_requires_catalog_refresh(session)
+    session_keys = [session_key]
+    if purpose == "weekend" and str(session["session_name"]).casefold() == "race":
+        qualifying = catalog_for(season).sessions
+        qualifying = qualifying[
+            qualifying["meeting_id"].eq(session["meeting_id"])
+            & qualifying["session_name"].astype(str).str.casefold().eq("qualifying")
+            & qualifying["status"].eq("completed")
+        ]
+        if len(qualifying) == 1:
+            session_keys.append(source_session_key(qualifying.iloc[0]["session_id"]))
     return {
         "season": season,
         "meeting_key": source_meeting_key(session["meeting_id"]),
@@ -480,7 +493,7 @@ def _job_payload(
         "target_session_key": session_key,
         "decision_time": _decision_time(session),
         "refresh": refresh or requires_catalog_refresh,
-        "session_keys": [session_key],
+        "session_keys": session_keys,
     }
 
 
@@ -1773,7 +1786,12 @@ def _season_performance_highlights(season: int, catalog: SeasonCatalog) -> None:
             f"0 comparable driver results · based on 0/{completed_races} "
             "completed races"
         )
-        grid_column.info("Reload race data to add official starting-grid information.")
+        grid_column.info(
+            "Starting-grid data is unavailable. Reload race data to request the "
+            "grid from its qualifying session. OpenF1 may not have published it yet."
+            if grids.empty and not results.empty
+            else "Load race results and qualifying starting grids to compare positions."
+        )
     else:
         grids = grids[["session_id", "driver_number", "grid_position"]].copy()
         grids["driver_number"] = pd.to_numeric(

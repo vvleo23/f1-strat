@@ -4,6 +4,8 @@ import hashlib
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 
 import pandas as pd
@@ -13,6 +15,7 @@ from f1_pipeline.dashboard.read_models import (
     available_seasons,
     load_master_table,
     load_session_bundle,
+    load_starting_grids,
 )
 
 
@@ -21,6 +24,33 @@ def file_hash(path: Path) -> str:
 
 
 class DashboardReadModelsTest(unittest.TestCase):
+    def test_starting_grid_maps_qualifying_to_same_weekend_race(self) -> None:
+        sessions = pd.DataFrame([
+            ("openf1:session:10", "m1", "Qualifying", "completed"),
+            ("openf1:session:11", "m1", "Sprint Qualifying", "completed"),
+            ("openf1:session:12", "m1", "Race", "completed"),
+            ("openf1:session:19", "m2", "Qualifying", "completed"),
+            ("openf1:session:20", "m2", "Race", "completed"),
+            ("openf1:session:30", "m3", "Qualifying", "completed"),
+            ("openf1:session:31", "m3", "Race", "scheduled"),
+            ("openf1:session:40", "m4", "Race", "completed"),
+        ], columns=["session_id", "meeting_id", "session_name", "status"])
+        catalog = SimpleNamespace(sessions=sessions)
+        grid = pd.DataFrame([{
+            "session_id": "openf1:session:10", "source_session_key": 10,
+            "driver_number": 1, "grid_position": 3,
+        }])
+        with patch(
+            "f1_pipeline.dashboard.read_models.load_session_bundle",
+            side_effect=[SimpleNamespace(frames={"starting_grid": grid}), DashboardDataError("unavailable")],
+        ):
+            result = load_starting_grids(catalog)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result.iloc[0]["session_id"], "openf1:session:12")
+        self.assertEqual(result.iloc[0]["grid_session_id"], "openf1:session:10")
+        self.assertEqual(result.iloc[0]["source_session_key"], 10)
+        self.assertEqual(grid.iloc[0]["session_id"], "openf1:session:10")
+
     def test_reads_authoritative_master_table(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

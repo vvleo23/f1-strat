@@ -463,6 +463,39 @@ def load_season_results(
     )
 
 
+def load_starting_grids(
+        catalog: SeasonCatalog,
+        *,
+        manifest_dir: Path | None = None,
+) -> pd.DataFrame:
+    completed = catalog.sessions[catalog.sessions["status"].eq("completed")]
+    qualifying = completed[
+        completed["session_name"].astype(str).str.casefold().eq("qualifying")
+    ]
+    races = completed[
+        completed["session_name"].astype(str).str.casefold().eq("race")
+    ]
+    frames: list[pd.DataFrame] = []
+    for race in races.itertuples():
+        matching = qualifying[qualifying["meeting_id"].eq(race.meeting_id)]
+        if len(matching) != 1:
+            continue
+        try:
+            frame = load_session_bundle(
+                source_session_key(matching.iloc[0]["session_id"]),
+                ("starting_grid",),
+                manifest_dir=manifest_dir,
+            ).frames["starting_grid"].copy()
+        except DashboardDataError:
+            continue
+        if frame.empty:
+            continue
+        frame["grid_session_id"] = frame["session_id"]
+        frame["session_id"] = race.session_id
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
 def load_qualifying_results(
         catalog: SeasonCatalog,
         *,

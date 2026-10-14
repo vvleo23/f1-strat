@@ -85,6 +85,7 @@ class OpenF1WeekendTest(unittest.TestCase):
         self.assertIn("location", plans[0]["skipped_endpoints"])
         self.assertIn("intervals", plans[0]["skipped_endpoints"])
         self.assertIn("session_result", plans[1]["required_endpoints"])
+        self.assertNotIn("starting_grid", plans[1]["optional_endpoints"])
         self.assertNotIn("position", plans[1]["required_endpoints"])
         self.assertNotIn("pit", plans[-1]["required_endpoints"])
         self.assertNotIn("starting_grid", plans[-1]["optional_endpoints"])
@@ -106,7 +107,15 @@ class OpenF1WeekendTest(unittest.TestCase):
         self.assertNotIn("location", complete[0]["required_endpoints"])
         self.assertNotIn("sessions", complete[1]["required_endpoints"])
         self.assertIn("location", complete[1]["required_endpoints"])
-        self.assertIn("starting_grid", complete[1]["optional_endpoints"])
+        self.assertNotIn("starting_grid", complete[1]["optional_endpoints"])
+        qualifying = plan_weekend_sessions([{
+            "session_id": "openf1:session:5",
+            "source_session_key": 5,
+            "session_type": "Qualifying",
+            "session_name": "Qualifying",
+            "status": "completed",
+        }])[0]
+        self.assertIn("starting_grid", qualifying["optional_endpoints"])
 
     def test_ingestion_persists_results_and_isolates_optional_failure(self) -> None:
         payloads = {
@@ -300,10 +309,6 @@ class OpenF1WeekendTest(unittest.TestCase):
             )
 
     def test_starting_grid_requests_opt_into_treat_404_as_empty(self) -> None:
-        # OpenF1 returns HTTP 404 for `starting_grid` on every checked race
-        # session; the real client converts that into an empty list only
-        # when this flag is set. A regression here would silently go back to
-        # treating every race weekend as `partial`.
         seen: dict[str, bool] = {}
 
         def response(endpoint, params, *, treat_404_as_empty=False):
