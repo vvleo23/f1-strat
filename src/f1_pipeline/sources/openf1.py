@@ -139,8 +139,10 @@ def make_parquet_safe(endpoint: str, frame: pd.DataFrame) -> pd.DataFrame:
         for column in ("gap_to_leader", "interval"):
             if column in safe.columns:
                 safe[column] = safe[column].map(_parquet_safe_text)
-    if endpoint == "session_result" and "gap_to_leader" in safe.columns:
-        safe["gap_to_leader"] = safe["gap_to_leader"].map(_parquet_safe_text)
+    if endpoint == "session_result":
+        for column in ("gap_to_leader", "position"):
+            if column in safe.columns:
+                safe[column] = safe[column].map(_parquet_safe_text)
     return safe
 
 

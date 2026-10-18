@@ -316,6 +316,9 @@ def _validate_source_frame(endpoint: str, frame: pd.DataFrame, session_key: int)
     numeric_columns = tuple(
         column for column in NUMERIC_COLUMNS[endpoint] if column in frame.columns
     )
+    if endpoint == "session_result" and "position" in frame.columns:
+        frame = frame.copy()
+        frame["position"] = frame["position"].mask(frame["position"].eq("RT"))
     try:
         validate_frame(
             frame,

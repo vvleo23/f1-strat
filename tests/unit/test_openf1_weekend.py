@@ -141,7 +141,7 @@ class OpenF1WeekendTest(unittest.TestCase):
                     "session_key": 42,
                     "meeting_key": 7,
                     "driver_number": 2,
-                    "position": None,
+                    "position": "RT",
                     "number_of_laps": 69,
                     "points": 18.0,
                     "duration": [80.1, 79.8],
@@ -216,6 +216,10 @@ class OpenF1WeekendTest(unittest.TestCase):
             self.assertEqual(result_facts.iloc[1]["laps_behind"], 1)
             self.assertEqual(result_facts.iloc[1]["duration_raw"], "[80.1,79.8]")
             self.assertTrue(pd.isna(result_facts.iloc[1]["position"]))
+            self.assertEqual(result_facts.iloc[0]["position"], 1)
+            self.assertEqual(result_facts.iloc[1]["position_raw"], "RT")
+            raw_results = pd.read_parquet(result["endpoints"]["session_result"]["raw_path"])
+            self.assertEqual(raw_results.iloc[1]["position"], "RT")
             manifest_path = Path(result["manifest_path"])
             self.assertEqual(json.loads(manifest_path.read_text())["status"], "available")
             self.assertEqual(result["manifest_sha256"], sha256(manifest_path))

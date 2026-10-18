@@ -356,7 +356,10 @@ def compare_prediction_models(
         baseline_error = comparison["baseline_position_error"]
         complex_error = comparison["complex_position_error"]
         comparison["closer_model"] = np.select(
-            [complex_error.lt(baseline_error), baseline_error.lt(complex_error)],
+            [
+                complex_error.lt(baseline_error).to_numpy(dtype=bool, na_value=False),
+                baseline_error.lt(complex_error).to_numpy(dtype=bool, na_value=False),
+            ],
             ["Complex", "Baseline"],
             default="Tie",
         )

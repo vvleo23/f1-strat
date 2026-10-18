@@ -261,6 +261,7 @@ def normalize_session_fact(
         result["meeting_id"] = _numeric(frame, "meeting_key").astype("Int64").map(
             lambda value: None if pd.isna(value) else f"openf1:meeting:{int(value)}"
         )
+        result["position_raw"] = _text(frame, "position")
         result["position"] = _numeric(frame, "position").astype("Int64")
         result["number_of_laps"] = _numeric(frame, "number_of_laps").astype("Int64")
         result["points"] = _numeric(frame, "points")

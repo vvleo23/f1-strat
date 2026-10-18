@@ -258,6 +258,19 @@ class QualifyingPredictionTest(unittest.TestCase):
         )
         self.assertTrue(comparison["complex_position_error"].eq(0).all())
 
+        actual["position"] = actual["position"].astype("Int64")
+        actual.loc[actual["driver_number"].eq(16), "position"] = pd.NA
+        comparison, summary = compare_prediction_models(predictions, actual)
+        unclassified = comparison[comparison["driver_number"].eq(16)].iloc[0]
+        self.assertTrue(pd.isna(unclassified["actual_position"]))
+        self.assertTrue(pd.isna(unclassified["complex_position_error"]))
+        self.assertTrue(pd.isna(unclassified["closer_model"]))
+        self.assertTrue(summary["driver_count"].eq(15).all())
+        self.assertEqual(
+            summary.loc[summary["model"].eq("Complex prediction"), "position_mae"].iloc[0],
+            0.0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
