@@ -43,6 +43,18 @@ DEFAULT_MAX_STALENESS_SECONDS = 8
 DEFAULT_INACTIVE_SECONDS = 90
 DEFAULT_PIT_EXIT_GRACE_SECONDS = 120
 MIN_MOVEMENT_PROGRESS = 0.0005
+# Cross-source retirement rule (special case on top of the movement rule).
+RETIREMENT_LINE_MARGIN = 0.06
+RETIREMENT_POSITION_DROP = 6
+RETIREMENT_POSITION_WINDOW_SECONDS = 45
+RETIREMENT_INCIDENT_WINDOW_SECONDS = 90
+RETIREMENT_OVERDUE_FACTOR = 1.6
+RETIREMENT_NEUTRALIZED_OVERDUE_FACTOR = 2.5
+RETIREMENT_PIT_AFTER_SECONDS = 150
+RETIREMENT_RESTART_GRACE_SECONDS = 90
+# Only messages that start with "RED FLAG" announce one; "CHEQUERED FLAG" and
+# steward notes such as "... NOTED - RED FLAG INFRINGEMENT" only contain the words.
+RED_FLAG_MESSAGE = re.compile(r"^RED FLAG\b")
 PLAYBACK_SPEEDS = (1, 2, 5, 10)
 DATASET_ENDPOINTS = (
     "sessions",
@@ -91,6 +103,9 @@ class CarState:
     tyre_age: int | None
     recently_pitted: bool
     inactive: bool = False
+    # Set only by the cross-source retirement rule; the car stays frozen
+    # where its position collapse began instead of following location data.
+    retired: bool = False
 
 
 @dataclass(frozen=True)
@@ -157,6 +172,162 @@ def driver_is_inactive(
         )
     activity[driver_number] = (race_progress, last_movement, inactive)
     return inactive
+
+
+@dataclass(frozen=True)
+class RetirementSignals:
+    """Cross-source evidence that a car has retired although it still moves.
+
+    OpenF1 location data can keep moving a crashed car along the track
+    (Italian GP 2026, LEC after the Parabolica crash). Timing, positions and
+    race control of the same source contradict that movement.
+    """
+
+    line_contradiction: bool = False
+    lap_overdue: bool = False
+    position_collapse: bool = False
+    incident_reported: bool = False
+
+    @property
+    def retired(self) -> bool:
+        # A timing signal is mandatory. Position collapse alone fits a spin,
+        # a missing OpenF1 lap row alone fits a car that is still racing, and
+        # race control alone names no car; the weaker race-control evidence
+        # therefore needs both timing signals.
+        timing = self.line_contradiction or self.lap_overdue
+        return timing and (
+            self.position_collapse
+            or (
+                self.incident_reported
+                and self.line_contradiction
+                and self.lap_overdue
+            )
+        )
+
+
+def retirement_signals(
+        *,
+        frame_time: pd.Timestamp,
+        status: str,
+        lap_started_at: pd.Timestamp | None,
+        lap_distance_ratio: float | None,
+        reference_lap_time: float | None,
+        position_history: list[tuple[pd.Timestamp, int]],
+        incident_times: list[pd.Timestamp],
+        excluded: bool,
+) -> RetirementSignals:
+    """Evaluate the retirement signals with data released up to frame_time."""
+    if excluded or status in {"RED", "STOPPED"}:
+        return RetirementSignals()
+    line = (
+        lap_started_at is not None
+        and lap_distance_ratio is not None
+        and math.isfinite(lap_distance_ratio)
+        and lap_distance_ratio >= 1.0 + RETIREMENT_LINE_MARGIN
+    )
+    overdue = False
+    if lap_started_at is not None and reference_lap_time:
+        factor = (
+            RETIREMENT_NEUTRALIZED_OVERDUE_FACTOR
+            if status in {"SC", "VSC"}
+            else RETIREMENT_OVERDUE_FACTOR
+        )
+        overdue = (
+            (frame_time - lap_started_at).total_seconds()
+            > factor * reference_lap_time
+        )
+    window_start = frame_time - timedelta(seconds=RETIREMENT_POSITION_WINDOW_SECONDS)
+    recent = [position for at, position in position_history if at >= window_start]
+    collapse = (
+        len(recent) >= 2
+        and recent[-1] - min(recent) >= RETIREMENT_POSITION_DROP
+    )
+    incident_start = frame_time - timedelta(seconds=RETIREMENT_INCIDENT_WINDOW_SECONDS)
+    incident = any(incident_start <= at <= frame_time for at in incident_times)
+    return RetirementSignals(line, overdue, collapse, incident)
+
+
+def _in_red_flag_restart(
+        frame_time: pd.Timestamp,
+        red_flags: list[pd.Timestamp],
+        restarts: list[pd.Timestamp],
+        lap_starts: list[tuple[pd.Timestamp, int]],
+) -> bool:
+    """Whether a red-flag suspension or its restart procedure is still running.
+
+    Cars entering the pit lane under red still start timed laps, single cars
+    can start a lap right after the restart message, and formation laps
+    reshuffle positions (Dutch GP 2026). The rule therefore resumes only once
+    at least half of the field has started a timed lap after the restart
+    message following the latest red flag, plus a grace period. Only data
+    released up to frame_time is used.
+    """
+    latest = max((at for at in red_flags if at <= frame_time), default=None)
+    if latest is None:
+        return False
+    restart = next((at for at in restarts if latest < at <= frame_time), None)
+    if restart is None:
+        return True
+    field_size = len({driver for _, driver in lap_starts})
+    started: set[int] = set()
+    resumed: pd.Timestamp | None = None
+    for at, driver in lap_starts:
+        if at <= restart:
+            continue
+        started.add(driver)
+        if 2 * len(started) >= field_size:
+            resumed = at
+            break
+    return resumed is None or frame_time < resumed + timedelta(
+        seconds=RETIREMENT_RESTART_GRACE_SECONDS
+    )
+
+
+def _retirement_context(
+        race_control: pd.DataFrame,
+        pits: pd.DataFrame,
+) -> tuple[
+    list[pd.Timestamp],
+    pd.Timestamp | None,
+    dict[int, list[tuple[pd.Timestamp, pd.Timestamp]]],
+    list[pd.Timestamp],
+    list[pd.Timestamp],
+]:
+    """Incident, red-flag and restart times, chequered-flag time and pit windows."""
+    incidents: list[pd.Timestamp] = []
+    red_flags: list[pd.Timestamp] = []
+    restarts: list[pd.Timestamp] = []
+    chequered: pd.Timestamp | None = None
+    if not race_control.empty and "date" in race_control.columns:
+        control = race_control.copy()
+        control["event_at"] = parse_openf1_datetimes(control["date"])
+        for row in control.dropna(subset=["event_at"]).itertuples(index=False):
+            message = str(getattr(row, "message", "") or "").upper()
+            flag = str(getattr(row, "flag", "") or "").upper()
+            at = cast(pd.Timestamp, cast(Any, row.event_at))
+            if "CHEQUERED FLAG" in message and (chequered is None or at < chequered):
+                chequered = at
+            if (
+                flag in {"DOUBLE YELLOW", "RED"}
+                or "DOUBLE YELLOW" in message
+                or RED_FLAG_MESSAGE.search(message)
+            ):
+                incidents.append(at)
+            if flag == "RED" or RED_FLAG_MESSAGE.search(message):
+                red_flags.append(at)
+            if "SESSION STARTED" in message or "SESSION RESUMED" in message:
+                restarts.append(at)
+    windows: dict[int, list[tuple[pd.Timestamp, pd.Timestamp]]] = {}
+    if not pits.empty and "date" in pits.columns:
+        pit_rows = pits.copy()
+        pit_rows["event_at"] = parse_openf1_datetimes(pit_rows["date"])
+        for row in pit_rows.dropna(subset=["event_at", "driver_number"]).itertuples(index=False):
+            at = cast(pd.Timestamp, cast(Any, row.event_at))
+            # The window opens only once the pit entry is published; no look-ahead.
+            windows.setdefault(int(cast(Any, row.driver_number)), []).append(
+                (at, at + timedelta(seconds=RETIREMENT_PIT_AFTER_SECONDS))
+            )
+    return sorted(incidents), chequered, windows, sorted(red_flags), sorted(restarts)
 
 
 def field_is_moving(
@@ -399,9 +570,10 @@ def status_events(
         category = str(getattr(row, "category", "") or "").upper()
         new_status = current
 
-        if flag == "RED" or "RED FLAG" in message:
+        if flag == "RED" or RED_FLAG_MESSAGE.search(message):
             new_status = "RED"
-        elif "VIRTUAL SAFETY CAR DEPLOYED" in message:
+        # OpenF1 uses "VIRTUAL SAFETY CAR ..." (2024) and "VSC ..." (2026).
+        elif "VIRTUAL SAFETY CAR DEPLOYED" in message or "VSC DEPLOYED" in message:
             new_status = "VSC"
         elif "SAFETY CAR DEPLOYED" in message:
             new_status = "SC"
@@ -421,8 +593,13 @@ def status_events(
                             "status": "GREEN",
                         }
                     )
-        elif "VIRTUAL SAFETY CAR ENDING" in message:
+                    # Reset so that a later deployment is recognized as a change.
+                    current = "GREEN"
+                    new_status = current
+        elif "VIRTUAL SAFETY CAR ENDING" in message or "VSC ENDING" in message:
             events.append({"status_at": event_date, "status": "GREEN"})
+            current = "GREEN"
+            new_status = current
         elif flag == "GREEN" and event_date >= race_start:
             new_status = "GREEN"
         elif category == "SESSIONSTATUS" and "SESSION STARTED" in message:
@@ -740,6 +917,7 @@ def build_location_progress(
                     else np.mod((cumulative - cumulative[-1]) / reference_distance, 1.0)
                 )
                 samples["lap_number_from_location"] = 0
+                samples["lap_distance_ratio"] = np.nan
                 progress_parts.append(
                     samples[
                         [
@@ -747,6 +925,7 @@ def build_location_progress(
                             "driver_number",
                             "track_progress",
                             "lap_number_from_location",
+                            "lap_distance_ratio",
                         ]
                     ]
                 )
@@ -772,6 +951,14 @@ def build_location_progress(
             ):
                 continue
 
+            # Distance driven since the timed lap start, causal (fixed per-driver
+            # speed limit) and not wrapped: a value clearly above 1.0 means the
+            # location data passed the line although timing started no new lap.
+            distance_ratio = (
+                np.full(len(samples), np.nan)
+                if int(current.lap_number) == 1 and start_reference is not None
+                else _distance_profile(samples, speed_limit)[0] / reference_distance
+            )
             if int(current.lap_number) == 1 and start_reference is not None:
                 normalized = _project_start_progress(samples, start_reference)
             elif following is not None:
@@ -787,6 +974,7 @@ def build_location_progress(
                 normalized = cumulative / reference_distance
             samples["track_progress"] = np.mod(normalized, 1.0)
             samples["lap_number_from_location"] = int(current.lap_number)
+            samples["lap_distance_ratio"] = distance_ratio
             progress_parts.append(
                 samples[
                     [
@@ -794,6 +982,7 @@ def build_location_progress(
                         "driver_number",
                         "track_progress",
                         "lap_number_from_location",
+                        "lap_distance_ratio",
                     ]
                 ]
             )
@@ -888,6 +1077,9 @@ def _prepare_asof_grid(
     laps = laps[
         ["lap_started_at", "driver_number", "lap_number"]
     ].drop_duplicates(["lap_started_at", "driver_number"], keep="last")
+    # OpenF1 omits date_start for irregular first laps (non-starters, pit-lane
+    # starts); such laps cannot be placed in time, so they are not assigned.
+    laps = laps.dropna(subset=["lap_started_at"])
     laps = laps.sort_values(["lap_started_at", "driver_number"])
     grid = pd.merge_asof(
         grid.sort_values(["date", "driver_number"]),
@@ -1032,6 +1224,15 @@ def _reference_lap_time_at(
         return None
 
 
+def _active_gaps_known(cars: list[CarState]) -> bool:
+    """Whether every active car has a gap, as required for a pit projection.
+
+    Inactive cars (e.g. non-starters) never receive a gap and are already
+    ignored by project_pit_exit, so they must not block the projection.
+    """
+    return all(math.isfinite(car.absolute_gap) for car in cars if not car.inactive)
+
+
 def build_replay(
         datasets: dict[str, pd.DataFrame],
         *,
@@ -1103,6 +1304,23 @@ def build_replay(
             )
     frames: list[ReplayFrame] = []
     driver_activity: dict[int, tuple[float, pd.Timestamp, bool]] = {}
+    (
+        incident_times,
+        chequered_at,
+        retirement_pit_windows,
+        red_flag_times,
+        restart_times,
+    ) = _retirement_context(datasets["race_control"], datasets["pit"])
+    lap_start_rows = datasets["laps"].assign(
+        _started=parse_openf1_datetimes(datasets["laps"]["date_start"])
+    ).dropna(subset=["_started", "driver_number"])
+    timed_lap_starts = sorted(
+        zip(lap_start_rows["_started"], lap_start_rows["driver_number"].astype(int))
+    )
+    position_history: dict[int, list[tuple[pd.Timestamp, int]]] = {}
+    progress_history: dict[int, list[tuple[pd.Timestamp, int, int, float]]] = {}
+    retired_since: dict[int, pd.Timestamp] = {}
+    retired_at_progress: dict[int, tuple[int, float]] = {}
 
     for date, snapshot in grid.groupby("date", sort=True):
         active = snapshot[
@@ -1155,6 +1373,83 @@ def build_replay(
                 frame_time=frame_time,
                 status=driver_status,
             )
+            lap_started_value = record.get("lap_started_at")
+            lap_started_at = (
+                cast(pd.Timestamp, lap_started_value)
+                if isinstance(lap_started_value, pd.Timestamp) and pd.notna(lap_started_value)
+                else None
+            )
+            position_value = as_finite_float(record.get("position"))
+            history = position_history.setdefault(driver_number, [])
+            progress_trail = progress_history.setdefault(driver_number, [])
+            cutoff = frame_time - timedelta(seconds=RETIREMENT_POSITION_WINDOW_SECONDS)
+            if position_value is not None:
+                history.append((frame_time, int(position_value)))
+                progress_trail.append(
+                    (frame_time, int(position_value), lap_number, lap_progress)
+                )
+                while history and history[0][0] < cutoff:
+                    history.pop(0)
+                while progress_trail and progress_trail[0][0] < cutoff:
+                    progress_trail.pop(0)
+            if driver_number in retired_since and (
+                (lap_started_at is not None and lap_started_at > retired_since[driver_number])
+                or any(
+                    retired_since[driver_number] < start <= frame_time
+                    for start, _ in retirement_pit_windows.get(driver_number, [])
+                )
+            ):
+                # Timing started a new lap or a pit stop was published after the
+                # retirement (e.g. a long repair stop): the car races on.
+                del retired_since[driver_number]
+                retired_at_progress.pop(driver_number, None)
+            if driver_number not in retired_since:
+                signals = retirement_signals(
+                    frame_time=frame_time,
+                    status=driver_status,
+                    lap_started_at=lap_started_at,
+                    lap_distance_ratio=as_finite_float(record.get("lap_distance_ratio")),
+                    reference_lap_time=reference_lap_time,
+                    position_history=history,
+                    incident_times=incident_times,
+                    excluded=(
+                        (chequered_at is not None and frame_time >= chequered_at)
+                        or _in_red_flag_restart(
+                            frame_time, red_flag_times, restart_times, timed_lap_starts
+                        )
+                        or any(
+                            start <= frame_time <= end
+                            for start, end in retirement_pit_windows.get(driver_number, [])
+                        )
+                    ),
+                )
+                if signals.retired:
+                    retired_since[driver_number] = frame_time
+                    # Freeze where the ongoing position collapse began: skip the
+                    # plateau at the back of the field, then walk back (only past
+                    # frames) while the position keeps improving.
+                    onset_index = len(progress_trail) - 1
+                    while (
+                        onset_index > 0
+                        and progress_trail[onset_index - 1][1]
+                        == progress_trail[onset_index][1]
+                    ):
+                        onset_index -= 1
+                    while (
+                        onset_index > 0
+                        and progress_trail[onset_index - 1][1]
+                        < progress_trail[onset_index][1]
+                    ):
+                        onset_index -= 1
+                    retired_at_progress[driver_number] = (
+                        (progress_trail[onset_index][2], progress_trail[onset_index][3])
+                        if progress_trail
+                        else (lap_number, lap_progress)
+                    )
+            retired = driver_number in retired_since
+            if retired:
+                lap_number, lap_progress = retired_at_progress[driver_number]
+            inactive = inactive or retired
             compound, tyre_age = _tyre_at_lap(
                 stint_lookup, driver_number, lap_number, frame_time
             )
@@ -1183,6 +1478,7 @@ def build_replay(
                     tyre_age=tyre_age,
                     recently_pitted=pd.notna(record.get("pit_at")),
                     inactive=inactive,
+                    retired=retired,
                 )
             )
 
@@ -1199,7 +1495,7 @@ def build_replay(
             project_pit_exit(cars, focus_driver, pit_loss, reference_lap_time)
             if pit_loss is not None
             and reference_lap_time is not None
-            and all(math.isfinite(car.absolute_gap) for car in cars)
+            and _active_gaps_known(cars)
             else None
         )
         lap_number = max((car.lap_number for car in cars), default=1)

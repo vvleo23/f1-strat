@@ -7,7 +7,9 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 import pandas as pd
 
@@ -361,6 +363,22 @@ def _lap_coverage(frame: pd.DataFrame) -> dict[str, Any]:
     return {"status": "partial" if missing else "available", "missing_laps": missing}
 
 
+def _drop_unstarted_stints(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
+    """Remove stints without any lap, e.g. a driver who did not start the race.
+
+    OpenF1 keeps such a stint with both `lap_start` and `lap_end` missing.
+    Only rows where both are missing are dropped; a stint with a start but
+    no recorded end, or the reverse, still fails validation.
+    """
+    if frame.empty or not {"lap_start", "lap_end"}.issubset(frame.columns):
+        return frame, []
+    unstarted = frame["lap_start"].isna() & frame["lap_end"].isna()
+    if not unstarted.any():
+        return frame, []
+    drivers = sorted(int(value) for value in frame.loc[unstarted, "driver_number"].dropna().unique())
+    return frame.loc[~unstarted].reset_index(drop=True), drivers
+
+
 def _cached_snapshot(
         raw_dir: Path, session_key: int, endpoint: str
 ) -> tuple[pd.DataFrame, Path] | None:
@@ -441,6 +459,9 @@ def _load_endpoint(
             if not payload
             else pd.DataFrame(payload),
         )
+    unstarted_drivers: list[int] = []
+    if endpoint == "stints":
+        frame, unstarted_drivers = _drop_unstarted_stints(frame)
     _validate_source_frame(endpoint, frame, session_key)
     coverage = _lap_coverage(frame) if endpoint == "laps" else None
     status = coverage["status"] if coverage is not None else "available"
@@ -459,6 +480,7 @@ def _load_endpoint(
         "retrieved_at": retrieved_at.isoformat(),
         "empty": frame.empty,
         **({"coverage": coverage} if coverage is not None else {}),
+        **({"dropped_unstarted_stints": unstarted_drivers} if unstarted_drivers else {}),
     }
 
 
@@ -493,6 +515,7 @@ def ingest_session(
         refresh: bool,
         raw_dir: Path,
         curated_dir: Path,
+        on_progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     session_key = int(plan["source_session_key"])
     required = set(plan["required_endpoints"])
@@ -500,6 +523,7 @@ def ingest_session(
     endpoint_results: dict[str, dict[str, Any]] = {}
     frames: dict[str, pd.DataFrame] = {}
     for endpoint in sorted(required | optional):
+        started = time.monotonic()
         try:
             driver_numbers = None
             if endpoint == "location" and "drivers" in frames:
@@ -522,6 +546,18 @@ def ingest_session(
                 "row_count": 0,
                 "error": str(exc),
             }
+        if on_progress is not None:
+            outcome = endpoint_results[endpoint]
+            on_progress(
+                {
+                    "stage": "openf1_endpoint",
+                    "session_key": session_key,
+                    "endpoint": endpoint,
+                    "status": outcome.get("status", "unavailable"),
+                    "row_count": outcome.get("row_count", 0),
+                    "duration_seconds": round(time.monotonic() - started, 3),
+                }
+            )
 
     ingested_at = pd.Timestamp(datetime.now(timezone.utc))
     for endpoint, frame in frames.items():
@@ -608,6 +644,7 @@ def ingest_weekend(
         client: JsonClient | None = None,
         raw_dir: Path = RAW_DATA_DIR,
         curated_dir: Path = CURATED_DATA_DIR,
+        on_progress: ProgressCallback | None = None,
 ) -> tuple[dict[str, Any], Path]:
     plans = plan_weekend_sessions(sessions, purpose=purpose)
     if not plans:
@@ -620,6 +657,7 @@ def ingest_weekend(
             refresh=refresh,
             raw_dir=raw_dir,
             curated_dir=curated_dir,
+            on_progress=on_progress,
         )
         for plan in plans
     ]

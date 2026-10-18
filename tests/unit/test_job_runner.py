@@ -10,6 +10,7 @@ from f1_pipeline.job_runner import (
     WeekendJobIntent,
     job_id,
     read_job_status,
+    read_job_progress,
     run_weekend_job,
 )
 
@@ -127,6 +128,64 @@ class JobRunnerTest(unittest.TestCase):
 
         with self.assertRaisesRegex(JobRunnerError, "2023 or later"):
             intent.normalized()
+
+    def test_pipeline_runner_receives_a_working_on_progress_callback(self) -> None:
+        def pipeline(*, on_progress, **kwargs: object):
+            on_progress({"stage": "openf1_endpoint", "endpoint": "sessions", "status": "available"})
+            on_progress({"stage": "openf1_endpoint", "endpoint": "laps", "status": "available"})
+            return {"status": "available", "run_id": "run-3"}, Path("manifest.json")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            job_dir = Path(temporary)
+            result = run_weekend_job(
+                self.intent(), job_dir=job_dir, pipeline_runner=pipeline
+            )
+
+            events = read_job_progress(result["job_id"], job_dir)
+            self.assertEqual([event["endpoint"] for event in events], ["sessions", "laps"])
+            self.assertIn("recorded_at", events[0])
+
+    def test_progress_file_is_reset_between_runs_of_the_same_job(self) -> None:
+        calls = {"count": 0}
+
+        def pipeline(*, on_progress, **kwargs: object):
+            calls["count"] += 1
+            on_progress({"stage": "openf1_endpoint", "endpoint": f"run-{calls['count']}"})
+            return {"status": "partial", "run_id": f"run-{calls['count']}"}, Path("manifest.json")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            job_dir = Path(temporary)
+            first = run_weekend_job(
+                self.intent(refresh=True), job_dir=job_dir, pipeline_runner=pipeline
+            )
+            second = run_weekend_job(
+                self.intent(refresh=True), job_dir=job_dir, pipeline_runner=pipeline
+            )
+
+            events = read_job_progress(second["job_id"], job_dir)
+            self.assertEqual([event["endpoint"] for event in events], ["run-2"])
+
+    def test_unwritable_progress_file_does_not_fail_the_job(self) -> None:
+        def pipeline(*, on_progress, **kwargs: object):
+            on_progress({"stage": "openf1_endpoint", "endpoint": "laps", "status": "available"})
+            return {"status": "available", "run_id": "run-4"}, Path("manifest.json")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            job_dir = Path(temporary)
+            identifier = job_id(self.intent())
+            # A directory in place of the progress file makes every write fail.
+            (job_dir / f"job_{identifier}.progress.json").mkdir()
+
+            result = run_weekend_job(
+                self.intent(), job_dir=job_dir, pipeline_runner=pipeline
+            )
+
+            self.assertEqual(result["status"], "available")
+            self.assertEqual(read_job_progress(identifier, job_dir), [])
+
+    def test_read_job_progress_returns_empty_list_when_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(read_job_progress("missing", Path(temporary)), [])
 
 
 if __name__ == "__main__":

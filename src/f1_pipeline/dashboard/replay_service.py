@@ -228,6 +228,7 @@ def replay_payload(
                         car.tyre_age,
                         car.recently_pitted,
                         car.inactive,
+                        car.retired,
                     ]
                     for car in frame.cars
                 ],

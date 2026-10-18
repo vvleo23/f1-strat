@@ -6,7 +6,11 @@ from datetime import timedelta
 
 import pandas as pd
 
-from f1_pipeline.analysis.race_strategy import calculate_strategy_timeline
+from f1_pipeline.analysis.race_strategy import (
+    _status_at,
+    build_pace_profile,
+    calculate_strategy_timeline,
+)
 from f1_pipeline.pit_loss import PitLoss
 
 
@@ -133,6 +137,79 @@ class RaceStrategyTest(unittest.TestCase):
             ]
         )
         return race
+
+    def test_pace_profile_ignores_qualifying_simulation_cool_down_laps(self) -> None:
+        laps = []
+        # Medium long run: 8 laps, 0.1 s/lap degradation.
+        for lap in range(1, 9):
+            laps.append({"driver_number": 1, "lap_number": lap, "lap_duration_seconds": 105.0 + 0.1 * lap, "is_pit_out_lap": False})
+        # Soft qualifying simulation: push laps alternate with slow cool-down laps.
+        for lap in range(9, 17):
+            duration = 102.0 if lap % 2 else 140.0
+            laps.append({"driver_number": 1, "lap_number": lap, "lap_duration_seconds": duration, "is_pit_out_lap": False})
+        stints = pd.DataFrame(
+            [
+                {"driver_number": 1, "lap_start": 1, "lap_end": 8, "compound": "MEDIUM", "tyre_age_at_start": 0},
+                {"driver_number": 1, "lap_start": 9, "lap_end": 16, "compound": "SOFT", "tyre_age_at_start": 0},
+            ]
+        )
+
+        profile = build_pace_profile([{"laps": pd.DataFrame(laps), "stints": stints}])
+
+        self.assertEqual(profile.compound_delta["SOFT"], 0.0)
+        self.assertGreater(profile.compound_delta["MEDIUM"], 0.0)
+        self.assertAlmostEqual(profile.degradation["MEDIUM"], 0.1, places=6)
+
+    def test_short_vsc_messages_set_and_clear_vsc_status(self) -> None:
+        start = pd.Timestamp("2026-07-19T13:00:00Z")
+
+        def control(*messages: str) -> pd.DataFrame:
+            return pd.DataFrame(
+                [
+                    {
+                        "event_time": start + timedelta(minutes=index),
+                        "available_at": start + timedelta(minutes=index),
+                        "message": message,
+                        "flag": None,
+                        "category": "SafetyCar",
+                    }
+                    for index, message in enumerate(messages, start=1)
+                ]
+            )
+
+        decision = start + timedelta(minutes=10)
+        self.assertEqual(_status_at(control("VSC DEPLOYED"), decision)[0], "VSC")
+        self.assertEqual(
+            _status_at(control("VIRTUAL SAFETY CAR DEPLOYED"), decision)[0], "VSC"
+        )
+        self.assertEqual(
+            _status_at(control("VSC DEPLOYED", "VSC ENDING"), decision)[0], "GREEN"
+        )
+
+    def test_chequered_flag_is_not_a_red_flag(self) -> None:
+        start = pd.Timestamp("2026-07-19T13:00:00Z")
+        control = pd.DataFrame(
+            [
+                {
+                    "event_time": start + timedelta(minutes=minute),
+                    "available_at": start + timedelta(minutes=minute),
+                    "message": message,
+                    "flag": flag,
+                    "category": "Flag",
+                }
+                for minute, message, flag in (
+                    (1, "GREEN LIGHT - PIT EXIT OPEN", "GREEN"),
+                    (60, "INCIDENT INVOLVING CAR 6 (HAD) NOTED - RED FLAG INFRINGEMENT", None),
+                    (90, "CHEQUERED FLAG", "CHEQUERED"),
+                )
+            ]
+        )
+
+        status, _ = _status_at(control, start + timedelta(minutes=91))
+        suspended = control.iloc[[0]].assign(message="RED FLAG - RACE SUSPENDED", flag=None)
+
+        self.assertEqual(status, "GREEN")
+        self.assertEqual(_status_at(suspended, start + timedelta(minutes=2))[0], "RED")
 
     def test_pre_race_plan_uses_prior_sessions(self) -> None:
         result = calculate_strategy_timeline(

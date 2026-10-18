@@ -13,6 +13,7 @@ from f1_pipeline.sources.openf1_weekend import (
     ALLOW_EMPTY,
     EMPTY_ON_404,
     OpenF1WeekendError,
+    _drop_unstarted_stints,
     _session_status,
     ingest_session,
     plan_weekend_sessions,
@@ -371,6 +372,78 @@ class OpenF1WeekendTest(unittest.TestCase):
             "partial",
         )
 
+    def test_on_progress_fires_once_per_endpoint_with_outcome(self) -> None:
+        class FakeClient:
+            def get_json(
+                self,
+                endpoint: str,
+                params: dict[str, object],
+                *,
+                treat_404_as_empty: bool = False,
+            ) -> list[dict[str, object]]:
+                if endpoint == "starting_grid":
+                    raise OpenF1WeekendError("starting_grid unavailable")
+                return [
+                    {
+                        "session_key": 42,
+                        "meeting_key": 7,
+                        "session_name": "Race",
+                        "date_start": "2026-07-26T13:00:00Z",
+                    }
+                ]
+
+        plan = {
+            "session_id": "openf1:session:42",
+            "source_session_key": 42,
+            "normalized_session_type": "race",
+            "required_endpoints": ["sessions"],
+            "optional_endpoints": ["starting_grid"],
+            "skipped_endpoints": [],
+        }
+        events: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ingest_session(
+                plan,
+                client=FakeClient(),
+                refresh=True,
+                raw_dir=root / "raw",
+                curated_dir=root / "curated",
+                on_progress=events.append,
+            )
+
+        self.assertEqual(len(events), 2)
+        by_endpoint = {event["endpoint"]: event for event in events}
+        self.assertEqual(by_endpoint["sessions"]["status"], "available")
+        self.assertEqual(by_endpoint["sessions"]["session_key"], 42)
+        self.assertIn("duration_seconds", by_endpoint["sessions"])
+        self.assertEqual(by_endpoint["starting_grid"]["status"], "unavailable")
+
+
+
+class DropUnstartedStintsTest(unittest.TestCase):
+    def test_removes_only_stints_without_start_and_end(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "session_key": [9636, 9636, 9636],
+                "driver_number": [1, 18, 31],
+                "stint_number": [1, 1, 1],
+                "lap_start": [1, None, None],
+                "lap_end": [30, None, 12],
+                "compound": ["INTERMEDIATE", "INTERMEDIATE", "INTERMEDIATE"],
+            }
+        )
+        kept, dropped = _drop_unstarted_stints(frame)
+        self.assertEqual(dropped, [18])
+        self.assertEqual(kept["driver_number"].tolist(), [1, 31])
+
+    def test_leaves_complete_frames_untouched(self) -> None:
+        frame = pd.DataFrame(
+            {"driver_number": [1], "lap_start": [1], "lap_end": [10]}
+        )
+        kept, dropped = _drop_unstarted_stints(frame)
+        self.assertEqual(dropped, [])
+        self.assertIs(kept, frame)
 
 if __name__ == "__main__":
     unittest.main()

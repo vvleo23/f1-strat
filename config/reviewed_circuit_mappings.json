@@ -24,6 +24,94 @@
       "expected_label": "Circuit Zandvoort",
       "expected_country": "Netherlands",
       "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 14,
+      "wikidata_entity_id": "Q171387",
+      "expected_label": "Autódromo José Carlos Pace",
+      "expected_country": "Brazil",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 10,
+      "wikidata_entity_id": "Q171288",
+      "expected_label": "Albert Park Circuit",
+      "expected_country": "Australia",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 49,
+      "wikidata_entity_id": "Q171358",
+      "expected_label": "Shanghai International Circuit",
+      "expected_country": "China",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 151,
+      "wikidata_entity_id": "Q106544792",
+      "expected_label": "Miami International Autodrome",
+      "expected_country": "Miami Gardens",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 23,
+      "wikidata_entity_id": "Q172860",
+      "expected_label": "Circuit Gilles Villeneuve",
+      "expected_country": "Canada",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 22,
+      "wikidata_entity_id": "Q171400",
+      "expected_label": "Circuit de Monaco",
+      "expected_country": "Monaco",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 19,
+      "wikidata_entity_id": "Q171566",
+      "expected_label": "Red Bull Ring",
+      "expected_country": "racing track",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 153,
+      "wikidata_entity_id": "Q126193406",
+      "expected_label": "Madring",
+      "expected_country": "Madrid",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 144,
+      "wikidata_entity_id": "Q17004958",
+      "expected_label": "Baku City Circuit",
+      "expected_country": "Azerbaijan",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 61,
+      "wikidata_entity_id": "Q171390",
+      "expected_label": "Marina Bay Street Circuit",
+      "expected_country": "Singapore",
+      "review_status": "reviewed"
+    },
+    {
+      "source_system": "openf1",
+      "source_circuit_key": 15,
+      "wikidata_entity_id": "Q171404",
+      "expected_label": "Circuit de Barcelona-Catalunya",
+      "expected_country": "Spain",
+      "review_status": "reviewed"
     }
   ]
 }

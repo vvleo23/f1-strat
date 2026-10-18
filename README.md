@@ -117,9 +117,13 @@ python -m streamlit run src/f1_pipeline/dashboard/app.py
 
 If PowerShell blocks activation, use `.\.venv\Scripts\python.exe` instead of `python` in each command.
 
+If port 8765 is already taken (for example by a WSL service), start the job service with `--port 18765` and the dashboard with `F1_JOB_SERVICE_URL=http://127.0.0.1:18765` set in its environment.
+
 ### Step 4: Open and load data
 
-Open [localhost:8501](http://localhost:8501). A fresh checkout starts with the bundled Hungaroring demo. Select a weekend or session and use its download action. The complete-weekend button loads all completed sessions plus Sprint/Race replay data.
+Open [localhost:8501](http://localhost:8501). A fresh checkout starts with the bundled Hungaroring demo. Select a weekend or session and use its download action. The complete-weekend button loads all completed sessions plus Sprint/Race replay data. Submit many weekends one after another: queued jobs wait at most 900 s for the shared pipeline lock. The **Pipeline activity** button shows jobs, manifests, and per-endpoint progress of running jobs.
+
+Recent changes, findings, and known limits (October 2026) are listed in [docs/projektdokumentation.md](docs/projektdokumentation.md), section 4 „Änderungen und Befunde vom 15. bis 18. Oktober 2026“.
 
 Optional automatic loading uses a third terminal with the same environment: `python -m f1_pipeline.scheduler --season 2026 --watch --refresh-calendar`. See [scheduling and reliability](#scheduling-and-reliability) for timing, retries, and restart limits.
 

@@ -345,6 +345,7 @@ def run_weekend_weather_pipeline(
         forecast_loader: ForecastLoader | None = None,
         weekend_loader: WeekendLoader | None = None,
         geometry_builder: GeometryBuilder = build_manifest_geometry,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[dict[str, Any], Path]:
     started_at = datetime.now(timezone.utc)
     cut_time = utc_timestamp(decision_time, "decision_time")
@@ -487,6 +488,7 @@ def run_weekend_weather_pipeline(
                 purpose=context["purpose"],
                 refresh=refresh,
                 curated_dir=output_dir,
+                on_progress=on_progress,
             )
             weekend_result = loaded_weekend
             jobs["openf1_weekend_facts"] = {
