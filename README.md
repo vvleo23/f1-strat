@@ -123,4 +123,4 @@ Open [localhost:8501](http://localhost:8501). A fresh checkout starts with the b
 
 Optional automatic loading uses a third terminal with the same environment: `python -m f1_pipeline.scheduler --season 2026 --watch --refresh-calendar`. See [scheduling and reliability](#scheduling-and-reliability) for timing, retries, and restart limits.
 
-### Step 5: profit!
+### Step 5: Profit!
