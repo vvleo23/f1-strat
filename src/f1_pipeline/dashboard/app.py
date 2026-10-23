@@ -11,6 +11,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from f1_pipeline.analysis.teammate_comparison import (
+    driver_comparison_metrics,
+    session_conditions,
+)
 from f1_pipeline.dashboard.job_client import JobServiceError, get_job, submit_job
 from f1_pipeline.dashboard.admin_panel import render_admin_panel
 from f1_pipeline.dashboard.qualifying_prediction import render_qualifying_prediction
@@ -1610,50 +1614,88 @@ def _head_to_head(
     return first_wins, second_wins, compared
 
 
-def _driver_comparison_metrics(
-        race_results: pd.DataFrame,
-        qualifying_results: pd.DataFrame,
-        driver_number: int,
-) -> list[str]:
-    races = race_results[
-        pd.to_numeric(race_results["driver_number"], errors="coerce").eq(driver_number)
-    ].copy()
-    if qualifying_results.empty or "driver_number" not in qualifying_results:
-        qualifying = pd.DataFrame(columns=["position"])
-    else:
-        qualifying = qualifying_results[
-            pd.to_numeric(qualifying_results["driver_number"], errors="coerce").eq(
-                driver_number
-            )
-        ].copy()
-    race_positions = pd.to_numeric(races.get("position"), errors="coerce").dropna()
-    qualifying_positions = pd.to_numeric(
-        qualifying.get("position"), errors="coerce"
-    ).dropna()
-    points = pd.to_numeric(races.get("points"), errors="coerce").fillna(0).sum()
-    dnf_count = (
-        races.get("dnf", pd.Series(False, index=races.index))
-        .fillna(False)
-        .astype(bool)
-        .sum()
+@st.cache_data(show_spinner=False)
+def comparison_results_for(season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    races = season_results_for(season)
+    qualifying = qualifying_results_for(season)
+    if races.empty:
+        return races, qualifying
+    catalog = catalog_for(season)
+    session_ids = set(races["session_id"]) | set(qualifying.get("session_id", ()))
+    meeting_circuits = catalog.meetings.set_index("meeting_id")["circuit_id"]
+    circuit_names = catalog.circuits.set_index("circuit_id")["circuit_name"]
+    contexts = []
+    sessions = catalog.sessions[catalog.sessions["session_id"].isin(session_ids)]
+    for session in sessions.itertuples():
+        session_key = source_session_key(session.session_id)
+        weather = session_frame_for(session_key, "weather")
+        control = session_frame_for(session_key, "race_control")
+        start = pd.to_datetime(session.scheduled_start_utc, utc=True)
+        end = pd.to_datetime(session.scheduled_end_utc, utc=True)
+        if pd.notna(start) and pd.notna(end):
+            weather = weather[
+                pd.to_datetime(
+                    weather.get("event_time", pd.Series(dtype=str)),
+                    utc=True, errors="coerce",
+                ).between(start, end)
+            ]
+            control = control[
+                pd.to_datetime(
+                    control.get("event_time", pd.Series(dtype=str)),
+                    utc=True, errors="coerce",
+                ).between(start, end)
+            ]
+        condition, temperature = session_conditions(
+            weather, session_frame_for(session_key, "stints"), control
+        )
+        contexts.append({
+            "session_id": session.session_id,
+            "condition": condition,
+            "air_temperature": temperature,
+            "circuit_name": circuit_names.get(meeting_circuits.get(session.meeting_id)),
+        })
+    context = pd.DataFrame(contexts)
+    return (
+        races.merge(context, on="session_id", how="left"),
+        qualifying.merge(context, on="session_id", how="left")
+        if not qualifying.empty else qualifying,
     )
-    return [
-        str(races["session_id"].nunique()),
-        f"{float(points):g}",
-        str(int(race_positions.eq(1).sum())),
-        str(int(race_positions.le(3).sum())),
-        f"P{int(race_positions.min())}" if not race_positions.empty else "—",
-        f"{race_positions.mean():.1f}" if not race_positions.empty else "—",
-        str(int(dnf_count)),
-        f"{qualifying_positions.mean():.1f}"
-        if not qualifying_positions.empty
-        else "—",
-    ]
+
+
+def _comparison_cell_styles(comparison: pd.DataFrame) -> pd.DataFrame:
+    styles = pd.DataFrame("", index=comparison.index, columns=comparison.columns)
+    styles.loc[
+        comparison.index.isin(("Finish", "DNF", "Qualifying"))
+    ] = "background-color: #2b303b; color: #ffffff"
+    higher_is_better = {
+        "Points": True,
+        "Wins": True,
+        "Podiums": True,
+        "Best finish": False,
+        "Average finish": False,
+        "DNFs": False,
+        "DNF rate": False,
+        "Best qualifying": False,
+        "Average qualifying position": False,
+    }
+    for metric, higher in higher_is_better.items():
+        for condition in ("Overall", "Dry", "Wet"):
+            columns = [column for column in comparison.columns if column[1] == condition]
+            values = pd.to_numeric(
+                comparison.loc[metric, columns].astype(str).str.extract(
+                    r"^P?(\d+(?:\.\d+)?)", expand=False
+                ),
+                errors="coerce",
+            )
+            if values.notna().sum() != 2 or values.nunique() == 1:
+                continue
+            better = values.idxmax() if higher else values.idxmin()
+            styles.at[metric, better] = "background-color: #234b3b; color: #ffffff"
+    return styles
 
 
 def _teammate_comparison(season: int, catalog: SeasonCatalog) -> None:
-    race_results = season_results_for(season)
-    qualifying_results = qualifying_results_for(season)
+    race_results, qualifying_results = comparison_results_for(season)
     if race_results.empty:
         st.info("Load race weekends to compare teammates.")
         return
@@ -1701,27 +1743,28 @@ def _teammate_comparison(season: int, catalog: SeasonCatalog) -> None:
     second_number = int(second.driver_number)
     first_name = str(first.full_name)
     second_name = str(second.full_name)
-    metrics = [
-        "Races",
-        "Points",
-        "Wins",
-        "Podiums",
-        "Best finish",
-        "Average finish",
-        "DNFs",
-        "Average qualifying position",
-    ]
-    comparison = pd.DataFrame(
+    comparison = pd.concat(
         {
-            "Metric": metrics,
-            f"{first_name} · #{first_number}": _driver_comparison_metrics(
+            f"{first_name} · #{first_number}": driver_comparison_metrics(
                 race_results, qualifying_results, first_number
             ),
-            f"{second_name} · #{second_number}": _driver_comparison_metrics(
+            f"{second_name} · #{second_number}": driver_comparison_metrics(
                 race_results, qualifying_results, second_number
             ),
-        }
+        },
+        axis=1,
     )
+    groups = (
+        ("", ("Races", "Points", "Wins", "Podiums")),
+        ("Finish", ("Best finish", "Average finish")),
+        ("DNF", ("DNFs", "DNF rate")),
+        ("Qualifying", ("Qualifying sessions", "Best qualifying", "Average qualifying position")),
+    )
+    comparison = comparison.reindex(
+        [row for title, metrics in groups for row in ((title, *metrics) if title else metrics)],
+        fill_value="",
+    )
+    comparison.insert(0, ("Metric", ""), comparison.index)
     qualifying_score = _head_to_head(
         qualifying_results, first_number, second_number
     )
@@ -1740,9 +1783,15 @@ def _teammate_comparison(season: int, catalog: SeasonCatalog) -> None:
         )
     with table_column:
         st.dataframe(
-            comparison,
+            comparison.style.apply(_comparison_cell_styles, axis=None),
+            column_config={
+                str(column): st.column_config.TextColumn(
+                    width=300 if column[1] == "Overall" else 75 if column[1] else 220
+                )
+                for column in comparison.columns
+            },
             hide_index=True,
-            height=40 + 35 * len(comparison),
+            height=75 + 35 * len(comparison),
             width="stretch",
         )
 

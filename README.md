@@ -14,6 +14,7 @@ Sources used:
 ## Verification
 
 - Race results, standings, wins, podiums, and teammate comparisons.
+- Teammate comparisons retain overall results and split races, points, average finish, DNFs, DNF rate, qualifying counts, and average qualifying position into Dry and Wet. Wet requires observed rain, a recorded intermediate/wet stint, or an explicit wet-weather race-control message. Sessions without a wet indicator count as Dry, including missing weather data. Forecasts are excluded. Best race and qualifying results show the circuit, session mean observed air temperature when available, and condition. Wins, podiums, and best results remain overall only. Shaded headings separate finish, DNF, and qualifying from the initial race results within one table. Green cells mark the better teammate value within the same condition. Ties, missing values, and session counts remain neutral.
 - Lap pace and tyre-stint analysis, including OpenF1/FastF1 comparisons.
 - Forecast versus observed track weather.
 - Track geometry and historical replay with a shared decision-time boundary.
