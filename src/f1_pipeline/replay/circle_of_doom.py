@@ -43,6 +43,9 @@ DEFAULT_MAX_STALENESS_SECONDS = 8
 DEFAULT_INACTIVE_SECONDS = 90
 DEFAULT_PIT_EXIT_GRACE_SECONDS = 120
 MIN_MOVEMENT_PROGRESS = 0.0005
+# Open laps: samples farther from the reference line than this share of a lap
+# (OpenF1 parking positions after a retirement, (0, 0) placeholders) are not projected.
+OPEN_LAP_MAX_LINE_DISTANCE = 0.02
 # Cross-source retirement rule (special case on top of the movement rule).
 RETIREMENT_LINE_MARGIN = 0.06
 RETIREMENT_POSITION_DROP = 6
@@ -739,6 +742,13 @@ def _distance_profile(
 
 
 def _project_start_progress(samples: pd.DataFrame, reference: np.ndarray) -> np.ndarray:
+    return _line_projection(samples, reference)[0]
+
+
+def _line_projection(
+        samples: pd.DataFrame, reference: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return lap progress and distance to the reference line per sample."""
     starts = reference[:-1]
     segments = np.diff(reference, axis=0)
     lengths = np.linalg.norm(segments, axis=1)
@@ -746,6 +756,7 @@ def _project_start_progress(samples: pd.DataFrame, reference: np.ndarray) -> np.
     squared = lengths ** 2
     coordinates = samples[["x", "y", "z"]].to_numpy(dtype=float)
     result = np.empty(len(coordinates))
+    line_distance = np.empty(len(coordinates))
     for offset in range(0, len(coordinates), 256):
         points = coordinates[offset:offset + 256]
         delta = points[:, None, :] - starts[None, :, :]
@@ -760,6 +771,27 @@ def _project_start_progress(samples: pd.DataFrame, reference: np.ndarray) -> np.
             + fractions[np.arange(len(points)), nearest] * lengths[nearest]
         )
         result[offset:offset + len(points)] = np.mod(along / cumulative[-1], 1.0)
+        line_distance[offset:offset + len(points)] = np.sqrt(
+            distances[np.arange(len(points)), nearest]
+        ) / cumulative[-1]
+    return result, line_distance
+
+
+def _project_open_lap(samples: pd.DataFrame, reference: np.ndarray) -> np.ndarray:
+    # A lap without a following lap start has no known length, so its progress
+    # comes from the position on the reference line instead of a distance ratio.
+    # Progress only moves forward from the lap start; off-line samples hold it.
+    projected, line_distance = _line_projection(samples, reference)
+    coordinates = samples[["x", "y"]].to_numpy(dtype=float)
+    on_line = (line_distance <= OPEN_LAP_MAX_LINE_DISTANCE) & np.any(coordinates != 0, axis=1)
+    result = np.empty(len(projected))
+    current = 0.0
+    for index, value in enumerate(projected):
+        if on_line[index]:
+            step = (value - current % 1.0 + 0.5) % 1.0 - 0.5
+            if step > 0:
+                current += step
+        result[index] = current
     return result
 
 
@@ -969,6 +1001,8 @@ def build_location_progress(
                     normalized = cumulative * lap_span / distance
                 else:
                     normalized = cumulative
+            elif start_reference is not None:
+                normalized = _project_open_lap(samples, start_reference)
             else:
                 cumulative, _ = _distance_profile(samples, speed_limit)
                 normalized = cumulative / reference_distance

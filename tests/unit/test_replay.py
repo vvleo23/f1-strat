@@ -690,6 +690,43 @@ class CircleOfDoomTest(unittest.TestCase):
         same_position = progress[progress.location_at.eq(start + timedelta(seconds=3))]
         self.assertEqual(same_position.track_progress.tolist(), [0.25, 0.25])
 
+    @classmethod
+    def _open_lap_progress(cls, open_lap):
+        # Two closed laps around a 10 x 10 square at (100, 100), then open lap 3.
+        start = pd.Timestamp("2026-07-19T13:00:00Z")
+        laps = cls._lap_starts(start, [(0, 1), (10, 2), (20, 3)])
+        square = [(0, 100, 100), (2.5, 110, 100), (5, 110, 110), (7.5, 100, 110)]
+        samples = [(lap * 10 + seconds, x, y) for lap in (0, 1) for seconds, x, y in square]
+        locations = pd.DataFrame([
+            {"driver_number": 1, "date": start + timedelta(seconds=seconds),
+             "x": x, "y": y, "z": 0}
+            for seconds, x, y in samples + [(20 + seconds, x, y) for seconds, x, y in open_lap]
+        ])
+        progress = build_location_progress(locations, laps, start)
+        lap = progress[progress.lap_number_from_location.eq(3)]
+        return lap.set_index((lap.location_at - start).dt.total_seconds() - 20)
+
+    def test_open_lap_uses_position_on_reference_line(self) -> None:
+        # A spin adds driven distance but no progress along the track.
+        lap = self._open_lap_progress(
+            [(0, 100, 100), (2, 110, 100), (3, 110, 105), (4, 110, 103), (5, 110, 105)]
+        )
+
+        self.assertEqual(lap.track_progress.round(3).tolist(), [0.0, 0.25, 0.375, 0.375, 0.375])
+        self.assertAlmostEqual(lap.loc[5, "lap_distance_ratio"], 0.475)
+
+    def test_open_lap_holds_position_for_off_line_and_placeholder_samples(self) -> None:
+        lap = self._open_lap_progress(
+            [(0, 100, 100), (2, 110, 100), (4, 500, 500), (6, 0, 0), (8, 110, 105)]
+        )
+
+        self.assertEqual(lap.track_progress.round(3).tolist(), [0.0, 0.25, 0.25, 0.25, 0.375])
+
+    def test_open_lap_does_not_jump_back_behind_the_line(self) -> None:
+        lap = self._open_lap_progress([(0, 100, 100), (0.5, 100, 100.4), (2, 110, 100)])
+
+        self.assertEqual(lap.track_progress.round(3).tolist(), [0.0, 0.0, 0.25])
+
     def test_neutralized_status_suppresses_optional_pit_projection(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
         finish = cast(pd.Timestamp, start + timedelta(seconds=120))
