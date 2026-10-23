@@ -97,7 +97,7 @@ python -m f1_pipeline.job_service
 
 ### Step 3: Start the dashboard in a second terminal
 
-Windows PowerShell:
+for Windows PowerShell:
 
 ```powershell
 cd C:\path\to\f1-strat
@@ -106,7 +106,7 @@ $env:PYTHONPATH = "src"
 python -m streamlit run src/f1_pipeline/dashboard/app.py
 ```
 
-macOS Terminal:
+for macOS Terminal:
 
 ```bash
 cd /path/to/f1-strat
