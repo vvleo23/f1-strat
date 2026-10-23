@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,8 +17,8 @@ from f1_pipeline.pit_loss import PitLoss, PitLossConfigError, load_pit_loss
 from f1_pipeline.settings import ARTIFACTS_DIR, CURATED_DATA_DIR, PROJECT_ROOT
 from f1_pipeline.temporal import TemporalCutError, cut_facts, decision_timestamp
 
-FEATURE_VERSION = "race_strategy_features_v1"
-CALCULATION_VERSION = "race_strategy_rules_v4"
+FEATURE_VERSION = "race_strategy_features_v2"
+CALCULATION_VERSION = "race_strategy_rules_v6"
 
 EVALUATION_COLUMNS = (
     "actual_pit_lap",
@@ -43,6 +44,11 @@ DEFAULT_MAXIMUM_AGE = {
     "WET": 30,
 }
 RACE_DISTANCE_PATH = PROJECT_ROOT / "config" / "race_distance_laps.json"
+LONG_RUN_LAP_RATIO = 1.07
+LONG_RUN_MIN_LAPS = 5
+# Only messages that start with "RED FLAG" announce one; "CHEQUERED FLAG" and
+# steward notes such as "... NOTED - RED FLAG INFRINGEMENT" only contain the words.
+RED_FLAG_MESSAGE = re.compile(r"^RED FLAG\b")
 
 
 class RaceStrategyError(RuntimeError):
@@ -194,14 +200,48 @@ def _lap_compounds(laps: pd.DataFrame, stints: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _long_run_laps(data: pd.DataFrame) -> pd.DataFrame:
+    """Select race-like practice laps for compound pace and degradation.
+
+    Practice soft runs are mostly qualifying simulations whose cool-down and
+    in-laps would make the compound look slow. Laps within LONG_RUN_LAP_RATIO
+    of the driver's session best are representative; stints with at least
+    LONG_RUN_MIN_LAPS such laps count as long runs. A compound without long
+    runs falls back to its representative laps, then to all valid laps.
+    """
+    if data.empty:
+        return data.copy()
+    frame = data.dropna(subset=["driver_number"]).copy()
+    session_best = frame.groupby(["session_index", "driver_number"])["lap_duration_seconds"].transform("min")
+    representative = frame[frame["lap_duration_seconds"].le(session_best * LONG_RUN_LAP_RATIO)].copy()
+    stint_key = pd.to_numeric(representative["lap_number"], errors="coerce") - representative["tyre_age"]
+    run_length = representative.groupby(
+        [representative["session_index"], representative["driver_number"], representative["compound"], stint_key],
+        dropna=False,
+    )["lap_duration_seconds"].transform("size")
+    long_runs = representative[run_length.ge(LONG_RUN_MIN_LAPS)]
+    selected = []
+    for compound, group in frame.groupby("compound"):
+        for candidate in (
+            long_runs[long_runs["compound"].eq(compound)],
+            representative[representative["compound"].eq(compound)],
+            group,
+        ):
+            if not candidate.empty:
+                selected.append(candidate)
+                break
+    return pd.concat(selected, ignore_index=True) if selected else frame.iloc[0:0].copy()
+
+
 def build_pace_profile(session_frames: list[dict[str, pd.DataFrame]]) -> PaceProfile:
     samples: list[pd.DataFrame] = []
     stint_rows: list[pd.DataFrame] = []
-    for frames in session_frames:
+    for session_index, frames in enumerate(session_frames):
         laps = _lap_compounds(frames.get("laps", pd.DataFrame()), frames.get("stints", pd.DataFrame()))
         if laps.empty or "lap_duration_seconds" not in laps.columns:
             continue
         laps = laps.copy()
+        laps["session_index"] = session_index
         laps["lap_duration_seconds"] = pd.to_numeric(laps["lap_duration_seconds"], errors="coerce")
         valid = laps["lap_duration_seconds"].between(45, 300)
         if "is_pit_out_lap" in laps.columns:
@@ -221,8 +261,9 @@ def build_pace_profile(session_frames: list[dict[str, pd.DataFrame]]) -> PacePro
         int(driver): float(group["lap_duration_seconds"].median())
         for driver, group in data.dropna(subset=["driver_number"]).groupby("driver_number")
     }
-    normalized = data.copy()
-    normalized["driver_median"] = normalized["driver_number"].map(driver_pace)
+    normalized = _long_run_laps(data)
+    long_run_pace = normalized.groupby("driver_number")["lap_duration_seconds"].median()
+    normalized["driver_median"] = normalized["driver_number"].map(long_run_pace)
     normalized["relative"] = normalized["lap_duration_seconds"] - normalized["driver_median"]
     compound_raw = normalized.groupby("compound")["relative"].median().to_dict()
     fastest = min((float(value) for value in compound_raw.values()), default=0.0)
@@ -269,13 +310,18 @@ def _status_at(race_control: pd.DataFrame, decision_time: pd.Timestamp) -> tuple
         flag = str(row.get("flag") or "").upper()
         category = str(row.get("category") or "").upper()
         latest_message = message or flag or category
-        if flag == "RED" or "RED FLAG" in message or "SESSION STOPPED" in message:
+        if flag == "RED" or RED_FLAG_MESSAGE.search(message) or "SESSION STOPPED" in message:
             status = "RED"
-        elif "VIRTUAL SAFETY CAR DEPLOYED" in message:
+        # OpenF1 uses "VIRTUAL SAFETY CAR ..." (2024) and "VSC ..." (2026).
+        elif "VIRTUAL SAFETY CAR DEPLOYED" in message or "VSC DEPLOYED" in message:
             status = "VSC"
         elif "SAFETY CAR DEPLOYED" in message:
             status = "SC"
-        elif "VIRTUAL SAFETY CAR ENDING" in message or "SAFETY CAR IN THIS LAP" in message:
+        elif (
+            "VIRTUAL SAFETY CAR ENDING" in message
+            or "VSC ENDING" in message
+            or "SAFETY CAR IN THIS LAP" in message
+        ):
             status = "GREEN"
         elif flag == "GREEN" or "SESSION STARTED" in message:
             status = "GREEN"

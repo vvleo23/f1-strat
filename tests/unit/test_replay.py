@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import unittest
 from datetime import timedelta
 from typing import cast
@@ -9,6 +10,7 @@ from typing import cast
 import pandas as pd
 
 from f1_pipeline.replay.circle_of_doom import (
+    _active_gaps_known,
     CarState,
     build_location_progress,
     build_replay,
@@ -18,7 +20,11 @@ from f1_pipeline.replay.circle_of_doom import (
     infer_race_window,
     make_parquet_safe,
     project_pit_exit,
+    RetirementSignals,
+    _in_red_flag_restart,
+    _retirement_context,
     reconstruct_absolute_gaps,
+    retirement_signals,
     status_events,
 )
 
@@ -84,6 +90,19 @@ class CircleOfDoomTest(unittest.TestCase):
         self.assertEqual(projection.projected_position, 3)
         self.assertEqual(projection.ahead, "COL")
         self.assertEqual(projection.behind, "PER")
+
+    def test_inactive_car_without_gap_does_not_block_pit_projection(self) -> None:
+        def car(driver: int, gap: float, inactive: bool = False) -> CarState:
+            return CarState(
+                driver_number=driver, acronym=str(driver), team_colour="#808080",
+                position=driver, lap_number=10, lap_progress=0.5,
+                absolute_gap=gap, displayed_gap="", interval=None, compound=None,
+                tyre_age=None, recently_pitted=False, inactive=inactive,
+            )
+
+        # A non-starter (e.g. Stroll, Sao Paulo 2024) never receives a gap.
+        self.assertTrue(_active_gaps_known([car(1, 0.0), car(18, math.nan, inactive=True)]))
+        self.assertFalse(_active_gaps_known([car(1, 0.0), car(2, math.nan)]))
 
     def test_field_must_resume_before_inactivity_timer_runs(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-08-23T13:00:00Z"))
@@ -421,6 +440,127 @@ class CircleOfDoomTest(unittest.TestCase):
 
         self.assertEqual(infer_race_window(laps, race_control), (start, finish))
 
+    def test_short_vsc_messages_create_vsc_phase(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
+        deployed = start + timedelta(minutes=30)
+        ending = start + timedelta(minutes=31)
+        control = pd.DataFrame(
+            [
+                {"date": deployed, "message": "VSC DEPLOYED", "flag": None, "category": "SafetyCar"},
+                {"date": ending, "message": "VSC ENDING", "flag": None, "category": "SafetyCar"},
+            ]
+        )
+
+        events = status_events(control, start)
+
+        self.assertEqual(
+            list(zip(events["status_at"], events["status"])),
+            [(start, "GREEN"), (deployed, "VSC"), (ending, "GREEN")],
+        )
+
+    def test_second_vsc_after_vsc_ending_creates_new_phase(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
+        times = [start + timedelta(minutes=minute) for minute in (30, 31, 40, 42)]
+        for deployed, ending in (
+            ("VSC DEPLOYED", "VSC ENDING"),
+            ("VIRTUAL SAFETY CAR DEPLOYED", "VIRTUAL SAFETY CAR ENDING"),
+        ):
+            with self.subTest(deployed=deployed):
+                control = pd.DataFrame(
+                    [
+                        {"date": at, "message": message, "flag": None, "category": "SafetyCar"}
+                        for at, message in zip(times, (deployed, ending, deployed, ending))
+                    ]
+                )
+
+                events = status_events(control, start)
+
+                self.assertEqual(
+                    list(zip(events["status_at"], events["status"])),
+                    [
+                        (start, "GREEN"),
+                        (times[0], "VSC"),
+                        (times[1], "GREEN"),
+                        (times[2], "VSC"),
+                        (times[3], "GREEN"),
+                    ],
+                )
+
+    def test_vsc_after_safety_car_in_this_lap_creates_new_phase(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
+        sc = start + timedelta(minutes=5)
+        sc_in = start + timedelta(minutes=10)
+        restart = start + timedelta(minutes=11)
+        vsc = start + timedelta(minutes=30)
+        second_sc = start + timedelta(minutes=50)
+        control = pd.DataFrame(
+            [
+                {"date": sc, "lap_number": 3, "message": "SAFETY CAR DEPLOYED", "flag": None, "category": "SafetyCar"},
+                {"date": sc_in, "lap_number": 5, "message": "SAFETY CAR IN THIS LAP", "flag": None, "category": "SafetyCar"},
+                {"date": vsc, "lap_number": 15, "message": "VSC DEPLOYED", "flag": None, "category": "SafetyCar"},
+                {"date": vsc + timedelta(minutes=1), "lap_number": 15, "message": "VSC ENDING", "flag": None, "category": "SafetyCar"},
+                {"date": second_sc, "lap_number": 25, "message": "SAFETY CAR DEPLOYED", "flag": None, "category": "SafetyCar"},
+            ]
+        )
+        laps = pd.DataFrame(
+            [{"driver_number": 1, "lap_number": 6, "date_start": restart}]
+        )
+
+        events = status_events(control, start, laps)
+
+        self.assertEqual(
+            list(zip(events["status_at"], events["status"])),
+            [
+                (start, "GREEN"),
+                (sc, "SC"),
+                (restart, "GREEN"),
+                (vsc, "VSC"),
+                (vsc + timedelta(minutes=1), "GREEN"),
+                (second_sc, "SC"),
+            ],
+        )
+
+    def test_safety_car_in_this_lap_without_next_lap_keeps_safety_car(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
+        sc = start + timedelta(minutes=5)
+        vsc = start + timedelta(minutes=30)
+        control = pd.DataFrame(
+            [
+                {"date": sc, "lap_number": 3, "message": "SAFETY CAR DEPLOYED", "flag": None, "category": "SafetyCar"},
+                {"date": sc + timedelta(minutes=5), "lap_number": 5, "message": "SAFETY CAR IN THIS LAP", "flag": None, "category": "SafetyCar"},
+                {"date": vsc, "lap_number": 15, "message": "VSC DEPLOYED", "flag": None, "category": "SafetyCar"},
+            ]
+        )
+
+        events = status_events(control, start)
+
+        # Without the next lap start the end of the SC phase cannot be placed in time.
+        self.assertEqual(
+            list(zip(events["status_at"], events["status"])),
+            [(start, "GREEN"), (sc, "SC"), (vsc, "VSC")],
+        )
+
+    def test_chequered_flag_does_not_create_red_phase(self) -> None:
+        start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
+        red = start + timedelta(minutes=20)
+        resumed = start + timedelta(minutes=40)
+        chequered = start + timedelta(minutes=90)
+        control = pd.DataFrame(
+            [
+                {"date": red, "message": "RED FLAG", "flag": "RED", "category": "Flag"},
+                {"date": resumed, "message": "GREEN LIGHT - PIT EXIT OPEN", "flag": "GREEN", "category": "Flag"},
+                {"date": resumed + timedelta(minutes=5), "message": "INCIDENT INVOLVING CAR 6 (HAD) NOTED - RED FLAG INFRINGEMENT", "flag": None, "category": "Other"},
+                {"date": chequered, "message": "CHEQUERED FLAG", "flag": "CHEQUERED", "category": "Flag"},
+            ]
+        )
+
+        events = status_events(control, start)
+
+        self.assertEqual(
+            list(zip(events["status_at"], events["status"])),
+            [(start, "GREEN"), (red, "RED"), (resumed, "GREEN")],
+        )
+
     def test_safety_car_in_this_lap_turns_green_on_next_lap(self) -> None:
         start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
         next_lap = cast(pd.Timestamp, start + timedelta(minutes=4))
@@ -489,6 +629,22 @@ class CircleOfDoomTest(unittest.TestCase):
             {"UNAVAILABLE"},
         )
         self.assertIsNone(final.projection)
+
+    def test_lap_without_start_time_does_not_break_replay(self) -> None:
+        # OpenF1 keeps a lap-1 row without date_start for non-starters and
+        # pit-lane starters (e.g. Sainz, Sao Paulo 2024).
+        start = cast(pd.Timestamp, pd.Timestamp("2026-07-19T13:00:00Z"))
+        datasets = self._datasets(start, start + timedelta(seconds=120))
+        laps = datasets["laps"]
+        missing = laps[laps["driver_number"].eq(3) & laps["lap_number"].eq(1)].copy()
+        missing["date_start"] = None
+        datasets["laps"] = pd.concat(
+            [laps.drop(missing.index), missing], ignore_index=True
+        )
+
+        replay = self._replay(datasets)
+
+        self.assertEqual({car.driver_number for car in replay.frames[-1].cars}, {1, 2, 3})
 
     def test_start_keeps_drivers_before_first_gap_and_position_updates(self) -> None:
         start = pd.Timestamp("2026-07-19T13:00:00Z")
@@ -761,6 +917,239 @@ class CircleOfDoomTest(unittest.TestCase):
             "stints": stints,
             "race_control": race_control,
             "location": location,
+        }
+
+
+class RetirementRuleTest(unittest.TestCase):
+    """Cross-source special rule: location keeps a crashed car moving."""
+
+    START = cast(pd.Timestamp, pd.Timestamp("2026-09-06T13:00:00Z"))
+    LAP = 40.0
+
+    def test_rule_needs_timing_and_position_or_all_three_other_signals(self) -> None:
+        self.assertFalse(RetirementSignals(line_contradiction=True).retired)
+        self.assertFalse(
+            RetirementSignals(position_collapse=True, incident_reported=True).retired
+        )
+        self.assertFalse(
+            RetirementSignals(line_contradiction=True, incident_reported=True).retired
+        )
+        self.assertTrue(
+            RetirementSignals(line_contradiction=True, position_collapse=True).retired
+        )
+        self.assertTrue(
+            RetirementSignals(lap_overdue=True, position_collapse=True).retired
+        )
+        self.assertTrue(
+            RetirementSignals(
+                line_contradiction=True, lap_overdue=True, incident_reported=True
+            ).retired
+        )
+
+    def _signals(self, **overrides):
+        options = dict(
+            frame_time=self.START + timedelta(seconds=100),
+            status="GREEN",
+            lap_started_at=self.START + timedelta(seconds=40),
+            lap_distance_ratio=1.10,
+            reference_lap_time=self.LAP,
+            position_history=[
+                (self.START + timedelta(seconds=90), 2),
+                (self.START + timedelta(seconds=100), 9),
+            ],
+            incident_times=[self.START + timedelta(seconds=95)],
+            excluded=False,
+        )
+        options.update(overrides)
+        return retirement_signals(**options)
+
+    def test_signals_for_crashed_car(self) -> None:
+        signals = self._signals()
+        self.assertTrue(signals.line_contradiction)
+        self.assertFalse(signals.lap_overdue)
+        self.assertTrue(signals.position_collapse)
+        self.assertTrue(signals.incident_reported)
+        self.assertTrue(signals.retired)
+
+    def test_pit_window_chequered_flag_and_red_flag_exclude_the_rule(self) -> None:
+        self.assertFalse(self._signals(excluded=True).retired)
+        self.assertFalse(self._signals(status="RED").retired)
+        self.assertFalse(self._signals(status="STOPPED").retired)
+
+    def test_neutralized_laps_are_not_overdue_too_early(self) -> None:
+        late = self.START + timedelta(seconds=40 + 80)
+        self.assertTrue(self._signals(frame_time=late).lap_overdue)
+        self.assertFalse(self._signals(frame_time=late, status="SC").lap_overdue)
+
+    def test_old_position_drop_and_old_incident_expire(self) -> None:
+        signals = self._signals(
+            position_history=[
+                (self.START + timedelta(seconds=40), 2),
+                (self.START + timedelta(seconds=100), 9),
+            ],
+            incident_times=[self.START],
+        )
+        self.assertFalse(signals.position_collapse)
+        self.assertFalse(signals.incident_reported)
+
+    def test_red_flag_restart_suspends_rule_until_field_restarted(self) -> None:
+        red = self.START + timedelta(minutes=5)
+        restart = self.START + timedelta(minutes=30)
+        field_lap = self.START + timedelta(minutes=35)
+        lap_starts = sorted(
+            [(self.START, driver) for driver in range(1, 5)]
+            # Laps started while entering the pit lane under red.
+            + [(red + timedelta(seconds=20), driver) for driver in range(1, 5)]
+            # A single car right after the restart message does not end it.
+            + [(restart + timedelta(seconds=5), 3)]
+            + [(field_lap, 1), (field_lap + timedelta(seconds=3), 2)]
+        )
+        check = lambda at: _in_red_flag_restart(at, [red], [self.START, restart], lap_starts)
+        self.assertFalse(check(red - timedelta(seconds=1)))
+        self.assertTrue(check(red + timedelta(minutes=10)))
+        self.assertTrue(check(restart + timedelta(minutes=2)))
+        # Half the field restarted, grace period, then the rule resumes.
+        self.assertTrue(check(field_lap + timedelta(seconds=60)))
+        self.assertFalse(check(field_lap + timedelta(seconds=100)))
+
+    def test_pit_window_opens_only_when_the_pit_entry_is_published(self) -> None:
+        pit_at = self.START + timedelta(seconds=200)
+        pits = pd.DataFrame([{"date": pit_at, "driver_number": 6}])
+
+        _, _, windows, _, _ = _retirement_context(pd.DataFrame(), pits)
+
+        # No look-ahead: nothing before the pit record is excluded.
+        self.assertEqual(windows, {6: [(pit_at, pit_at + timedelta(seconds=150))]})
+
+    def test_unknown_lap_start_gives_no_timing_signal(self) -> None:
+        signals = self._signals(lap_started_at=None)
+        self.assertFalse(signals.line_contradiction)
+        self.assertFalse(signals.lap_overdue)
+
+    def test_crashed_car_with_moving_location_becomes_inactive(self) -> None:
+        crash = self.START + timedelta(seconds=1 + 78)
+        replay = build_replay(
+            self._season_like_datasets(crash),
+            focus_driver=1,
+            green_pit_loss=20.0,
+            neutralized_pit_loss=12.0,
+            frame_seconds=2,
+            max_staleness_seconds=5,
+        )
+        inactive_since: dict[str, pd.Timestamp] = {}
+        for frame in replay.frames:
+            for car in frame.cars:
+                if car.inactive:
+                    inactive_since.setdefault(car.acronym, frame.date)
+        self.assertIn("CRA", inactive_since)
+        self.assertGreater(inactive_since["CRA"], crash)
+        self.assertLess(inactive_since["CRA"], crash + timedelta(seconds=25))
+        # The retired car stays frozen where its position collapse began
+        # (just before the crash), not where the gliding location data went.
+        crashed = [
+            (frame.date, car)
+            for frame in replay.frames
+            for car in frame.cars
+            if car.acronym == "CRA"
+        ]
+        frozen = [car for date, car in crashed if car.retired]
+        self.assertTrue(frozen)
+        self.assertEqual({(car.lap_number, car.lap_progress) for car in frozen}, {
+            (frozen[0].lap_number, frozen[0].lap_progress)
+        })
+        before_crash = [car for date, car in crashed if date <= crash]
+        self.assertIn(
+            (frozen[0].lap_number, frozen[0].lap_progress),
+            {(car.lap_number, car.lap_progress) for car in before_crash},
+        )
+        self.assertTrue(all(car.inactive for car in frozen))
+        self.assertFalse(any(car.retired for date, car in crashed if date <= crash))
+        # A missing OpenF1 lap row alone and a regular pit stop never retire a car.
+        self.assertNotIn("MIS", inactive_since)
+        self.assertNotIn("PIT", inactive_since)
+
+    def _season_like_datasets(self, crash: pd.Timestamp) -> dict[str, pd.DataFrame]:
+        start, lap = self.START, self.LAP
+        names = {1: "LEA", 2: "CRA", 3: "THR", 4: "FOU", 5: "MIS", 6: "PIT", 7: "SEV", 8: "EIG"}
+        radius = 1000.0
+        end = start + timedelta(seconds=3 * lap + 20)
+        laps, locations, positions, intervals = [], [], [], []
+        for number in names:
+            offset = float(number - 1)
+            for lap_number in (1, 2, 3, 4):
+                if number == 2 and lap_number >= 3:
+                    continue  # crashed: timing never starts lap 3
+                if number == 5 and lap_number == 3:
+                    continue  # OpenF1 lap row missing, car keeps racing
+                laps.append({
+                    "date_start": start + timedelta(seconds=offset + lap * (lap_number - 1)),
+                    "driver_number": number,
+                    "lap_number": lap_number,
+                    "lap_duration": lap,
+                    "is_pit_out_lap": False,
+                })
+            seconds = 0.0
+            driven = 0.0
+            while start + timedelta(seconds=seconds) <= end:
+                at = start + timedelta(seconds=seconds)
+                if seconds > offset:
+                    driven += 0.5 if number == 2 and at > crash else 1.0
+                angle = 2 * math.pi * driven / lap
+                locations.append({
+                    "date": at,
+                    "driver_number": number,
+                    "x": radius * math.cos(angle),
+                    "y": radius * math.sin(angle),
+                    "z": 0.0,
+                })
+                seconds += 1.0
+            positions.append({"date": start, "driver_number": number, "position": number})
+            intervals.append({
+                "date": start,
+                "driver_number": number,
+                "gap_to_leader": offset,
+                "interval": 1.0 if number > 1 else 0.0,
+            })
+        for step, number in enumerate((3, 4, 5, 6, 7, 8), start=1):
+            positions.append({
+                "date": crash + timedelta(seconds=step),
+                "driver_number": number,
+                "position": number - 1,
+            })
+            # As each car passes, the crashed car loses one place (OpenF1 feed).
+            positions.append({
+                "date": crash + timedelta(seconds=step),
+                "driver_number": 2,
+                "position": 2 + step,
+            })
+        # Regular pit stop: PIT drops to last place, covered by the pit record.
+        pit_at = start + timedelta(seconds=50)
+        positions.append({"date": pit_at + timedelta(seconds=5), "driver_number": 6, "position": 8})
+        race_control = pd.DataFrame([
+            {"date": start, "message": "SESSION STARTED", "flag": None, "category": "SessionStatus"},
+            {
+                "date": crash + timedelta(seconds=3),
+                "message": "DOUBLE YELLOW IN TRACK SECTOR 15",
+                "flag": "DOUBLE YELLOW",
+                "category": "Flag",
+            },
+            {"date": end, "message": "SESSION FINISHED", "flag": None, "category": "SessionStatus"},
+        ])
+        return {
+            "sessions": pd.DataFrame([{"session_key": 1}]),
+            "drivers": pd.DataFrame([
+                {"driver_number": number, "name_acronym": acronym, "team_colour": "111111"}
+                for number, acronym in names.items()
+            ]),
+            "laps": pd.DataFrame(laps),
+            "intervals": pd.DataFrame(intervals),
+            "position": pd.DataFrame(positions),
+            "pit": pd.DataFrame([{"date": pit_at, "driver_number": 6, "lap_number": 2}]),
+            "stints": pd.DataFrame(
+                columns=["driver_number", "lap_start", "lap_end", "compound", "tyre_age_at_start"]
+            ),
+            "race_control": race_control,
+            "location": pd.DataFrame(locations),
         }
 
 

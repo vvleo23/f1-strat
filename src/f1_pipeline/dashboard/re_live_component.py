@@ -319,11 +319,18 @@ export default function(component) {
     const fragments = []
     let focusProgress = null
     for (const [driver, car] of fromCars) {
-      if (Boolean(car[12])) continue
+      // Cars retired by the cross-source rule stay frozen and grey at the
+      // place where their position collapse began; other inactive cars stay hidden.
+      const retired = Boolean(car[13])
+      if (Boolean(car[12]) && !retired) continue
       const next = toCars.get(driver) || car
-      const progress = interpolateProgress(Number(car[5]), Number(next[5]), fraction)
+      const progress = retired ? Number(car[5]) : interpolateProgress(Number(car[5]), Number(next[5]), fraction)
       const point = pointAtProgress(selected.points, progress)
       const focus = driver === Number(data.focus_driver)
+      if (retired) {
+        fragments.push(`<g transform="translate(${point[0]} ${point[1]})" opacity=".75"><circle r="${focus ? '.052' : '.039'}" fill="#5b6270" stroke="${focus ? '#8fd8ff' : '#050608'}" stroke-width="${focus ? '.018' : '.011'}"/><text y="-.055" text-anchor="middle" fill="#c9ced8" font-size=".052" font-weight="800" paint-order="stroke" stroke="#080a0e" stroke-width=".014">${escapeHtml(car[1])} OUT</text></g>`)
+        continue
+      }
       if (focus) focusProgress = progress
       const pitting = pitDrivers.has(driver)
       const colour = /^#?[0-9a-f]{6}$/i.test(String(car[2] || '')) ? `#${String(car[2]).replace('#', '')}` : '#808080'
@@ -560,7 +567,7 @@ export default function(component) {
 
   function significant(event) {
     const value = `${event.flag || ''} ${event.category || ''} ${event.message || ''}`.toUpperCase()
-    return ['YELLOW', 'RED FLAG', 'SAFETY CAR', 'VIRTUAL SAFETY CAR', 'SESSION STARTED', 'SESSION STOPPED'].some(token => value.includes(token))
+    return ['YELLOW', 'RED FLAG', 'SAFETY CAR', 'VIRTUAL SAFETY CAR', 'VSC DEPLOYED', 'VSC ENDING', 'SESSION STARTED', 'SESSION STOPPED'].some(token => value.includes(token))
   }
 
   function showNotification(event) {

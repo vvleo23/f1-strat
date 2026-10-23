@@ -5,6 +5,7 @@ from contextlib import ExitStack
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -108,6 +109,50 @@ def read_job_status(identifier: str, job_dir: Path = JOB_MANIFEST_DIR) -> dict[s
     return payload if isinstance(payload, dict) else None
 
 
+def _progress_path(identifier: str, job_dir: Path = JOB_MANIFEST_DIR) -> Path:
+    return job_dir / f"job_{identifier}.progress.json"
+
+
+def read_job_progress(identifier: str, job_dir: Path = JOB_MANIFEST_DIR) -> list[dict[str, Any]]:
+    """Read the incremental progress events recorded for one job, if any.
+
+    Absent, unreadable, or malformed files are treated as "no events yet"
+    rather than an error -- a job that has not reached its first progress
+    callback (or predates this feature) simply has nothing to show.
+    """
+    path = _progress_path(identifier, job_dir)
+    if not path.is_file():
+        return []
+    try:
+        with path.open(encoding="utf-8") as stream:
+            payload = json.load(stream)
+    except (OSError, json.JSONDecodeError):
+        return []
+    events = payload.get("events") if isinstance(payload, dict) else None
+    return events if isinstance(events, list) else []
+
+
+def _write_progress(path: Path, payload: dict[str, Any]) -> None:
+    # Progress is display-only; a locked or unwritable file must not fail the job.
+    try:
+        atomic_json(payload, path)
+    except OSError:
+        pass
+
+
+def _make_progress_recorder(
+        identifier: str, job_dir: Path
+) -> Callable[[dict[str, Any]], None]:
+    path = _progress_path(identifier, job_dir)
+
+    def record(event: dict[str, Any]) -> None:
+        events = read_job_progress(identifier, job_dir)
+        events.append({"recorded_at": datetime.now(timezone.utc).isoformat(), **event})
+        _write_progress(path, {"schema_version": 1, "job_id": identifier, "events": events})
+
+    return record
+
+
 def run_weekend_job(
         intent: WeekendJobIntent,
         *,
@@ -136,11 +181,16 @@ def run_weekend_job(
         "status": "running",
         "intent": intent_payload,
     }
+    progress = _make_progress_recorder(identifier, job_dir)
     manifest = None
     manifest_path = None
     completed = running
     try:
         atomic_json(running, status_path)
+        _write_progress(
+            _progress_path(identifier, job_dir),
+            {"schema_version": 1, "job_id": identifier, "events": []},
+        )
         with file_lock(job_dir / "source_pipeline", timeout_seconds=900.0):
             manifest, manifest_path = pipeline_runner(
                 season=normalized.season,
@@ -150,6 +200,7 @@ def run_weekend_job(
                 decision_time=normalized.decision_time,
                 refresh=normalized.refresh,
                 session_keys=normalized.session_keys or None,
+                on_progress=progress,
             )
         calculation = None
         calculation_path = None

@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from f1_pipeline.dashboard.job_client import JobServiceError, get_job, submit_job
+from f1_pipeline.dashboard.admin_panel import render_admin_panel
 from f1_pipeline.dashboard.qualifying_prediction import render_qualifying_prediction
 from f1_pipeline.dashboard.read_models import (
     DashboardDataError,
@@ -2023,8 +2024,8 @@ def _season_analysis(season: int, catalog: SeasonCatalog) -> None:
 
 def _dashboard(seasons: tuple[int, ...]) -> None:
     st.title("Analysis Dashboard")
-    season_column, refresh_column, _ = st.columns(
-        [1, 1.2, 7.8], gap="small", vertical_alignment="bottom"
+    season_column, refresh_column, admin_column, _ = st.columns(
+        [1, 1.2, 1.4, 6.4], gap="small", vertical_alignment="bottom"
     )
     season = int(season_column.selectbox("Season", seasons))
     if refresh_column.button(
@@ -2034,6 +2035,9 @@ def _dashboard(seasons: tuple[int, ...]) -> None:
         help="Reread local manifests. This does not download data.",
     ):
         st.cache_data.clear()
+        st.rerun()
+    if admin_column.button("Pipeline activity", use_container_width=True):
+        st.session_state["view"] = "admin"
         st.rerun()
     try:
         catalog = catalog_for(season)
@@ -2086,6 +2090,13 @@ def main() -> None:
         render_qualifying_prediction(
             catalog_for(season), int(session_key), prediction, go_back=go_back
         )
+        return
+    if st.session_state.get("view") == "admin":
+        def go_back_to_dashboard() -> None:
+            st.session_state["view"] = "dashboard"
+            st.rerun()
+
+        render_admin_panel(on_back=go_back_to_dashboard)
         return
     _dashboard(seasons)
 
