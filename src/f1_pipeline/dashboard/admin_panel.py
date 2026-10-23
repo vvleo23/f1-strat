@@ -1,18 +1,3 @@
-"""Read-only pipeline activity view: what ran, when, and with what status.
-
-Reads only already-persisted job-status files and pipeline manifests; it
-never triggers a fetch or a job itself, matching the same read-only boundary
-every other dashboard page keeps toward the pipeline. A job's own status file
-is written with `status: "running"` before the pipeline starts and only
-overwritten with its final status afterward (`job_runner.py::run_weekend_job`),
-so a job genuinely in flight shows up here as running -- not simulated, just
-surfaced. Most rows are otherwise historical: pipeline manifests are only
-written once, at completion. The one exception is the OpenF1 endpoint fetch
-loop, which now writes an incremental progress event after each endpoint
-(`job_runner.py::read_job_progress`) -- while a job is running, this page
-shows those events growing live and auto-refreshes to keep polling for more.
-"""
-
 from __future__ import annotations
 
 import html
