@@ -501,9 +501,12 @@ def load_qualifying_results(
         *,
         manifest_dir: Path | None = None,
 ) -> pd.DataFrame:
+    # Sprint Qualifying belongs to the Sprint, which load_season_results counts as a race.
     qualifying_sessions = catalog.sessions[
         catalog.sessions["status"].eq("completed")
-        & catalog.sessions["session_name"].astype(str).str.casefold().eq("qualifying")
+        & catalog.sessions["session_name"].astype(str).str.casefold().isin(
+            ("qualifying", "sprint qualifying")
+        )
     ]
     frames: list[pd.DataFrame] = []
     for session_id in qualifying_sessions["session_id"]:
