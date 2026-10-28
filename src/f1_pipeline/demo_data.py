@@ -6,9 +6,10 @@ from typing import Any
 
 import pandas as pd
 
-from f1_pipeline.dashboard.read_models import load_forecast, select_session_manifest
+from f1_pipeline.dashboard.read_models import load_forecast, load_session_bundle
 from f1_pipeline.persistence import atomic_json, atomic_parquet, sha256
 from f1_pipeline.settings import PROJECT_ROOT
+from f1_pipeline.sources.openf1_weekend import _lap_coverage
 
 SEASON = 2026
 MEETING_ID = "openf1:meeting:1291"
@@ -91,32 +92,46 @@ def _build_dimensions(driver_numbers: set[int]) -> dict[str, dict[str, Any]]:
 
 def _build_session() -> tuple[dict[str, Any], set[int]]:
     requested = (*REPLAY_ENDPOINTS, *DISPLAY_ENDPOINTS)
-    source_manifest, _ = select_session_manifest(
+    source = load_session_bundle(
         SESSION_KEY,
         requested,
+        layer="raw",
         manifest_dir=SOURCE_MANIFEST_DIR,
     )
+    coverage = _lap_coverage(source.frames["laps"])
+    if coverage["status"] != "available":
+        raise ValueError("Demo source contains internal lap gaps. Refresh the session before rebuilding.")
+    source_manifest = source.manifest
+    silver_frames: dict[str, pd.DataFrame] = {}
+    for endpoint in requested:
+        result = source_manifest["endpoints"][endpoint]
+        if result.get("silver_path"):
+            path = PROJECT_ROOT / result["silver_path"]
+            if sha256(path) != result.get("silver_sha256"):
+                raise ValueError(f"Demo source Silver hash mismatch for {endpoint}.")
+            silver_frames[endpoint] = pd.read_parquet(path)
     manifest = copy.deepcopy(source_manifest)
-    manifest["status"] = "available"
     endpoints: dict[str, dict[str, Any]] = {}
     for endpoint in requested:
         source_result = source_manifest["endpoints"][endpoint]
-        raw = pd.read_parquet(PROJECT_ROOT / source_result["raw_path"])
+        raw = source.frames[endpoint]
         if endpoint == "location":
             raw = _demo_location(raw)
         raw_info = _write_frame(raw, DEMO_RAW_DIR / f"{endpoint}.parquet")
         result = {
-            "status": "available",
+            **source_result,
             "fetched": False,
             "row_count": raw_info["row_count"],
             "raw_path": raw_info["path"],
             "raw_sha256": raw_info["sha256"],
             "retrieved_at": source_result["retrieved_at"],
             "empty": raw.empty,
+            **({"coverage": coverage} if endpoint == "laps" else {}),
         }
-        silver_path = source_result.get("silver_path")
-        if silver_path:
-            silver = pd.read_parquet(PROJECT_ROOT / silver_path)
+        if endpoint in silver_frames:
+            silver = silver_frames[endpoint].copy()
+            silver["raw_path"] = raw_info["path"]
+            silver["raw_sha256"] = raw_info["sha256"]
             silver_info = _write_frame(
                 silver,
                 DEMO_CURATED_DIR / "facts" / f"session_{SESSION_KEY}" / f"{endpoint}.parquet",

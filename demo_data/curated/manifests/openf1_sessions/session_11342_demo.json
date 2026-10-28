@@ -24,7 +24,7 @@
   "skipped_endpoints": [],
   "endpoints": {
     "sessions": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 1,
       "raw_path": "demo_data/raw/session_11342/sessions.parquet",
@@ -33,7 +33,7 @@
       "empty": false
     },
     "drivers": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 22,
       "raw_path": "demo_data/raw/session_11342/drivers.parquet",
@@ -41,23 +41,33 @@
       "retrieved_at": "2026-08-30T18:21:59.448577+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/drivers.parquet",
-      "silver_sha256": "b5fefed194d54dda9a078b0448012a50133d2bb9d21a19da492abc5f570a29fb",
+      "silver_sha256": "e48f18244749f8dcbc77e84b527960d5e3a1f56de74eee019f9b30ee7d59627b",
       "silver_row_count": 22
     },
     "laps": {
       "status": "available",
       "fetched": false,
-      "row_count": 1423,
+      "row_count": 1432,
       "raw_path": "demo_data/raw/session_11342/laps.parquet",
-      "raw_sha256": "165a387d25c8fbfcf2aabc78506727dd80851f4e7b0f1bb5507f7b9cd4d52a20",
-      "retrieved_at": "2026-08-30T18:21:59.503260+00:00",
+      "raw_sha256": "9c79e6122946e4b9089aef207ba3f23e7be25ed2a711bc9b4081e28f093f3733",
+      "retrieved_at": "2026-10-28T17:21:51.006088+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/laps.parquet",
-      "silver_sha256": "b6e84b3f452e08ffd0d99c0f2d90c29d94bf5aadb174127f12a6cd579991fb3d",
-      "silver_row_count": 1423
+      "silver_sha256": "50260302d97976c6f49959a66be904de9f4c85255d50c59442f39f77b3de74f2",
+      "silver_row_count": 1432,
+      "coverage": {
+        "status": "available",
+        "missing_laps": {}
+      },
+      "request": {
+        "endpoint": "https://api.openf1.org/v1/laps",
+        "params": {
+          "session_key": 11342
+        }
+      }
     },
     "intervals": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 29593,
       "raw_path": "demo_data/raw/session_11342/intervals.parquet",
@@ -65,11 +75,11 @@
       "retrieved_at": "2026-08-30T18:21:59.461058+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/intervals.parquet",
-      "silver_sha256": "063a69b4db009606853ebf33556421f7d6dfe737d28d286b27c3cc619468f607",
+      "silver_sha256": "0ed8ba1bba27dd50cb5a383fa6fcc27f2965924859606643100b9b496f1a1699",
       "silver_row_count": 29593
     },
     "position": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 536,
       "raw_path": "demo_data/raw/session_11342/position.parquet",
@@ -77,11 +87,11 @@
       "retrieved_at": "2026-08-30T18:21:59.419097+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/position.parquet",
-      "silver_sha256": "501c0d2de71131f73dde00fa625993f5b8377d64a2f53a261378db90b9a49f07",
+      "silver_sha256": "309fac8bb490a59f6471b2ce6168a8599fbf030a35209422267a9327f9ef96dd",
       "silver_row_count": 536
     },
     "pit": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 44,
       "raw_path": "demo_data/raw/session_11342/pit.parquet",
@@ -89,11 +99,11 @@
       "retrieved_at": "2026-08-30T18:21:59.686919+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/pit.parquet",
-      "silver_sha256": "a6c03521eda6894ab6efe69e20b9487736f3d1ed50a2fa1ad2130c0a1b77a5b7",
+      "silver_sha256": "b02019dd4f521a25a70dfff7b288581f69376a8076bf03023c48952cdbce888c",
       "silver_row_count": 44
     },
     "stints": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 67,
       "raw_path": "demo_data/raw/session_11342/stints.parquet",
@@ -101,11 +111,11 @@
       "retrieved_at": "2026-08-30T18:21:59.434560+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/stints.parquet",
-      "silver_sha256": "e9d6078b808c0ede05d636f07fc2a46284527688c68502998c874146f8ffd6d8",
+      "silver_sha256": "ca396635dfbde9f1ed95697ebb623967d391b4f59a33370e8872978f1a146ac7",
       "silver_row_count": 67
     },
     "race_control": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 80,
       "raw_path": "demo_data/raw/session_11342/race_control.parquet",
@@ -113,11 +123,11 @@
       "retrieved_at": "2026-08-30T18:21:59.467579+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/race_control.parquet",
-      "silver_sha256": "6e40147f8c957ca09d7349732e0cf7fef539980f70c930f8aa02e9692b937bdb",
+      "silver_sha256": "4c6fae9a8fef76b5cd1844dd388792f6a254de3a4d65afd84c74f45562d986a9",
       "silver_row_count": 80
     },
     "location": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 51766,
       "raw_path": "demo_data/raw/session_11342/location.parquet",
@@ -126,7 +136,7 @@
       "empty": false
     },
     "session_result": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 22,
       "raw_path": "demo_data/raw/session_11342/session_result.parquet",
@@ -134,11 +144,11 @@
       "retrieved_at": "2026-08-30T18:21:59.693229+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/session_result.parquet",
-      "silver_sha256": "454e7235372416c1870fedbc75ea950c16ae19874e1db5b60eaec75b89fcf987",
+      "silver_sha256": "d243b07ed91a3b4eff2a354aa0c198a0b3a8add4ac43e5df0eacee3d7ae2c3c4",
       "silver_row_count": 22
     },
     "championship_drivers": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 22,
       "raw_path": "demo_data/raw/session_11342/championship_drivers.parquet",
@@ -146,11 +156,11 @@
       "retrieved_at": "2026-08-30T18:21:59.591769+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/championship_drivers.parquet",
-      "silver_sha256": "72ee116daf9d0ecd4d6b772a5e47e8de3487c89919178a1a6e49262e65b479b9",
+      "silver_sha256": "a746a2bc459947849abb9a40fc1d32e1e131040e002f9f22284caa5690818fad",
       "silver_row_count": 22
     },
     "championship_teams": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 11,
       "raw_path": "demo_data/raw/session_11342/championship_teams.parquet",
@@ -158,11 +168,11 @@
       "retrieved_at": "2026-08-30T18:21:59.407650+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/championship_teams.parquet",
-      "silver_sha256": "cc6e33e6db0708e7049d2e632d09c8c6149260ad6abbc5d9dd44c52cabe27e54",
+      "silver_sha256": "85540e9e0cd2a9b9ab2c56f7fc378c2232ffdf3e8018b0ad441fdacd01e369fd",
       "silver_row_count": 11
     },
     "weather": {
-      "status": "available",
+      "status": "stale",
       "fetched": false,
       "row_count": 156,
       "raw_path": "demo_data/raw/session_11342/weather.parquet",
@@ -170,8 +180,12 @@
       "retrieved_at": "2026-08-30T18:21:59.675309+00:00",
       "empty": false,
       "silver_path": "demo_data/curated/facts/session_11342/weather.parquet",
-      "silver_sha256": "9335e37726fd93f915e4f134604366625cf9e753d0b1b5742776bdd0e557a02a",
+      "silver_sha256": "88cb986cbe569976711ae7f5ffae14bc4e8602694515899e9dc19e7c7f355c27",
       "silver_row_count": 156
     }
+  },
+  "repaired_from": {
+    "path": "data/curated/manifests/openf1_sessions/session_11342_93e8e3a244d3770f.json",
+    "sha256": "710d7f9cd93a134a94f9715da73f7f4aac827971a4fb394544d15e340facd04c"
   }
 }
