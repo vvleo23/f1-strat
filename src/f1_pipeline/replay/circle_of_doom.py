@@ -1,3 +1,5 @@
+# AI assistance: Anthropic Claude
+# Scope: Retirement rule from timing, positions, and race control; projection of open laps onto the reference lap.
 """Create an interactive OpenF1 race replay."""
 
 from __future__ import annotations

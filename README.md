@@ -14,7 +14,7 @@ Sources used:
 ## Verification
 
 - Race results, standings, wins, podiums, and teammate comparisons.
-- Teammate comparisons retain overall results and split races, points, average finish, DNFs, DNF rate, qualifying counts, and average qualifying position into Dry and Wet. Wet requires observed rain, a recorded intermediate/wet stint, or an explicit wet-weather race-control message. Sessions without a wet indicator count as Dry, including missing weather data. Forecasts are excluded. Best race and qualifying results show the circuit, session mean observed air temperature when available, and condition. Wins, podiums, and best results remain overall only. Shaded headings separate finish, DNF, and qualifying from the initial race results within one table. Green cells mark the better teammate value within the same condition. Ties, missing values, and session counts remain neutral.
+- Teammate comparisons with overall, Dry, and Wet values and qualifying/race head-to-head; Sprint and Sprint Qualifying count as race and qualifying. Wet requires observed rain, a recorded intermediate/wet stint, or an explicit wet-weather race-control message; forecasts are excluded.
 - Lap pace and tyre-stint analysis, including OpenF1/FastF1 comparisons.
 - Forecast versus observed track weather.
 - Track geometry and historical replay with a shared decision-time boundary.
@@ -24,7 +24,7 @@ These analyses verify the data flow and expose limitations. Broader model valida
 
 ## Scheduling and reliability
 
-Run `python -m f1_pipeline.scheduler --season 2026 --watch` in a separate terminal. It waits for known event times and refreshes the calendar at startup and each wake-up. A failed refresh records its error and falls back to the existing local calendar when available. Changes that move an event before the next known wake-up still require a restart with `--refresh-calendar`.
+Run `python -m f1_pipeline.scheduler --season 2026 --watch` in a separate terminal. It waits for known event times and refreshes the calendar at startup and each wake-up. A failed refresh records its error and falls back to the existing local calendar when available. Changes that move an event before the next known wake-up require a scheduler restart.
 
 | Trigger | Action |
 |---|---|
@@ -36,7 +36,7 @@ The retry is five hours after session end, four hours after the first scheduled 
 
 ## AI assistance
 
-The following areas received AI assistance. File headers identify the supported scope rather than declaring every line AI-generated.
+All team members used AI assistance (OpenAI GPT, Anthropic Claude) throughout implementation and documentation. The table and file headers list the main areas, not every assisted line.
 
 | Area | Files | Disclosed assistance |
 |---|---|---|
@@ -46,7 +46,8 @@ The following areas received AI assistance. File headers identify the supported 
 | Wikidata coordinates | [wikidata.py](src/f1_pipeline/sources/wikidata.py), [weekend_weather_pipeline.py](src/f1_pipeline/sources/weekend_weather_pipeline.py) | Circuit candidate search, identity and coordinate validation, and pipeline integration. Coordinates remain sourced from Wikidata evidence. |
 | English domain terminology and ubiquitous language | [master_data.py](src/f1_pipeline/master_data.py), [session_facts.py](src/f1_pipeline/session_facts.py), and source cards | Naming domain entities, facts, fields, and documentation terms. |
 | README | [README.md](README.md) | English wording, translation, structure, and documentation updates. |
-| Contributions to source interfaces | [openf1.py](src/f1_pipeline/sources/openf1.py), [openf1_weekend.py](src/f1_pipeline/sources/openf1_weekend.py), [weekend_weather_pipeline.py](src/f1_pipeline/sources/weekend_weather_pipeline.py) | Contributions by `twernicke03` to source error/empty-response handling and shared-write protection; commit `0460c6d`. README documentation contribution: `d6bb609`. |
+| Source error handling and concurrent jobs | [openf1.py](src/f1_pipeline/sources/openf1.py), [openf1_weekend.py](src/f1_pipeline/sources/openf1_weekend.py), [weekend_weather_pipeline.py](src/f1_pipeline/sources/weekend_weather_pipeline.py), [persistence.py](src/f1_pipeline/persistence.py) | Source error/empty-response handling and shared-write protection for concurrent weekend jobs. |
+| Admin panel, replay, and dashboard fixes | [admin_panel.py](src/f1_pipeline/dashboard/admin_panel.py), [job_runner.py](src/f1_pipeline/job_runner.py), [circle_of_doom.py](src/f1_pipeline/replay/circle_of_doom.py), [race_strategy.py](src/f1_pipeline/analysis/race_strategy.py), [app.py](src/f1_pipeline/dashboard/app.py), [re_live_component.py](src/f1_pipeline/dashboard/re_live_component.py), [read_models.py](src/f1_pipeline/dashboard/read_models.py) | Pipeline-activity panel with live job progress, retirement rule and open-lap projection in the replay, race-status message handling, long-run tyre profile, forecast/wind display, and Sprint Qualifying in the teammate comparison. |
 
 ## Setup and start
 
@@ -122,6 +123,6 @@ If PowerShell blocks activation, use `.\.venv\Scripts\python.exe` instead of `py
 
 Open [localhost:8501](http://localhost:8501). A fresh checkout starts with the bundled Hungaroring demo. Select a weekend or session and use its download action. The complete-weekend button loads all completed sessions plus Sprint/Race replay data.
 
-Optional automatic loading uses a third terminal with the same environment: `python -m f1_pipeline.scheduler --season 2026 --watch --refresh-calendar`. See [scheduling and reliability](#scheduling-and-reliability) for timing, retries, and restart limits.
+Optional automatic loading uses a third terminal with the same environment: `python -m f1_pipeline.scheduler --season 2026 --watch`. See [scheduling and reliability](#scheduling-and-reliability) for timing, retries, and restart limits.
 
 ### Step 5: Profit!

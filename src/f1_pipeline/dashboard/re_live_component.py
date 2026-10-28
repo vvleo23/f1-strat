@@ -1,3 +1,5 @@
+# AI assistance: Anthropic Claude
+# Scope: Unified wind units and interpolated hourly forecast in the Re-Live view.
 from __future__ import annotations
 
 from collections.abc import Callable

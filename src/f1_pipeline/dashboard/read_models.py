@@ -1,3 +1,5 @@
+# AI assistance: Anthropic Claude
+# Scope: Counting Sprint Qualifying as qualifying in the teammate comparison.
 from __future__ import annotations
 
 import hashlib

@@ -1,3 +1,5 @@
+# AI assistance: Anthropic Claude
+# Scope: Long-run tyre profile and detection of red-flag and VSC messages.
 from __future__ import annotations
 
 import hashlib
