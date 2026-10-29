@@ -18,6 +18,12 @@ HTML = """
     <section class="weather-strip">
       <div class="weather-current"></div>
       <div class="forecast-grid"></div>
+      <div class="weather-attribution">
+        Observations: <a href="https://openf1.org/" target="_blank" rel="noopener noreferrer">OpenF1</a> ·
+        Forecasts: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo.com</a> ·
+        <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> (forecasts) ·
+        Hourly forecasts interpolated where needed, wind converted to m/s.
+      </div>
     </section>
   </header>
   <div class="dashboard-grid">
@@ -77,12 +83,14 @@ CSS = """
 * { box-sizing: border-box; }
 button { font: inherit; }
 .relive-shell { height: 920px; overflow: hidden; border: 1px solid #2b313b; border-radius: 14px; background: #090b0f; color: #f4f7fb; position: relative; }
-.topbar { height: 132px; display: grid; grid-template-columns: 118px 270px minmax(0, 1fr); align-items: stretch; border-bottom: 1px solid #2b313b; background: #0e1117; }
+.topbar { height: 156px; display: grid; grid-template-columns: 118px 270px minmax(0, 1fr); align-items: stretch; border-bottom: 1px solid #2b313b; background: #0e1117; }
 .home { margin: 16px; border: 0; background: transparent; color: #e10600; font-size: 24px; font-weight: 850; cursor: pointer; text-align: left; }
 .event-heading { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: 6px; padding: 12px 16px; border-left: 1px solid #242a33; }
 .event-name { overflow: hidden; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
 .event-detail { color: #9aa4b2; font-size: 12px; }
-.weather-strip { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 8px; padding: 10px; min-width: 0; }
+.weather-strip { display: grid; grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 4px 8px; padding: 10px; min-width: 0; }
+.weather-attribution { grid-column: 1 / -1; color: #9aa4b2; font-size: 10px; line-height: 1.3; }
+.weather-attribution a { color: #8fd8ff; text-decoration: underline; }
 .weather-current, .forecast-tile { border: 1px solid #2a313c; border-radius: 9px; background: #151922; }
 .weather-current { padding: 10px 12px; }
 .weather-title, .tile-title { color: #9aa4b2; font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
@@ -91,7 +99,7 @@ button { font: inherit; }
 .forecast-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; min-width: 0; }
 .forecast-tile { min-width: 0; padding: 9px 10px; }
 .tile-primary { margin-top: 7px; font-size: 17px; font-weight: 800; }
-.dashboard-grid { height: 712px; display: grid; grid-template-columns: 285px minmax(600px, 1fr) 320px; gap: 10px; padding: 10px; }
+.dashboard-grid { height: 688px; display: grid; grid-template-columns: 285px minmax(600px, 1fr) 320px; gap: 10px; padding: 10px; }
 .panel, .centre-panel { min-width: 0; overflow: hidden; border: 1px solid #292f39; border-radius: 10px; background: #10141b; }
 .left-panel { display: grid; grid-template-rows: auto 26px minmax(0, 1fr); }
 .race-summary { padding: 12px; border-bottom: 1px solid #292f39; }

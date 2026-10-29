@@ -1007,7 +1007,9 @@ def _meeting_dialog(
                 },
             )
             st.caption(
-                "Open-Meteo hourly forecast at each session's scheduled start, "
+                "Forecast data by [Open-Meteo.com](https://open-meteo.com/) "
+                "([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). "
+                "Hourly values at each session's scheduled start are "
                 "linearly interpolated between the two nearest hourly points "
                 "(≈) where the start falls between them. Wind converted to m/s "
                 "to match track observations."

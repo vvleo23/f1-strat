@@ -41,6 +41,7 @@ All team members used AI assistance (OpenAI GPT, Anthropic Claude) throughout im
 | Area | Files | Disclosed assistance |
 |---|---|---|
 | API, source, and interface documentation | [Source cards](docs/sources/) | Drafting and structuring source roles, access, interface contracts, and limitations. Original provider references remain the factual sources. |
+| Tests | [API client tests](tests/unit/test_openf1_client.py), [ingestion tests](tests/unit/test_openf1_weekend.py), [weather pipeline tests](tests/unit/test_weekend_weather_pipeline.py) | Drafting selected tests from API documentation and project rules using controlled responses. Checks cover response handling, validation, missing data, source failure isolation, and temporal boundaries. These tests verify our code, not live provider availability. |
 | Master data | [master_data.py](src/f1_pipeline/master_data.py) | Implementing season dimensions, identity handling, and data preparation from OpenF1. |
 | Circuit layout | [geometry.py](src/f1_pipeline/geometry.py) | Developing local centerline reconstruction from OpenF1 vehicle-location coordinates. |
 | Wikidata coordinates | [wikidata.py](src/f1_pipeline/sources/wikidata.py), [weekend_weather_pipeline.py](src/f1_pipeline/sources/weekend_weather_pipeline.py) | Circuit candidate search, identity and coordinate validation, and pipeline integration. Coordinates remain sourced from Wikidata evidence. |
