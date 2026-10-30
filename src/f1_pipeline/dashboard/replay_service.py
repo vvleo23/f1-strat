@@ -15,7 +15,6 @@ from f1_pipeline.geometry import (
     synthetic_track_geometry,
 )
 from f1_pipeline.replay.circle_of_doom import (
-    CarState,
     DATASET_ENDPOINTS,
     DEFAULT_FRAME_SECONDS,
     DEFAULT_MAX_STALENESS_SECONDS,
@@ -86,55 +85,6 @@ def replay_bundle(session_key: int) -> SessionBundle:
         manifest_path=bundle.manifest_path,
         missing=bundle.missing,
     )
-
-
-def final_reconstructed_positions(replay: ReplayResult) -> pd.DataFrame:
-    terminal = max(
-        replay.frames,
-        key=lambda candidate_frame: (
-            candidate_frame.lap_number,
-            len(candidate_frame.cars),
-            candidate_frame.date,
-        ),
-    )
-    latest_by_driver: dict[int, CarState] = {}
-    for frame in replay.frames:
-        for car in frame.cars:
-            latest_by_driver[car.driver_number] = car
-    terminal_cars = sorted(
-        terminal.cars, key=lambda candidate_car: candidate_car.position
-    )
-    terminal_drivers = {int(car.driver_number) for car in terminal_cars}
-    last_seen = sorted(
-        (
-            car
-            for driver_number, car in latest_by_driver.items()
-            if driver_number not in terminal_drivers
-        ),
-        key=lambda candidate_car: (
-            -candidate_car.lap_number,
-            candidate_car.position,
-            candidate_car.driver_number,
-        ),
-    )
-    rows: list[dict[str, Any]] = []
-    for position, car in enumerate((*terminal_cars, *last_seen), start=1):
-        rows.append(
-            {
-                "Position": position,
-                "Driver": car.acronym,
-                "Lap": car.lap_number,
-                "Gap": car.displayed_gap,
-                "Compound": car.compound,
-                "Tyre age": car.tyre_age,
-                "State": (
-                    "Finish frame"
-                    if car.driver_number in terminal_drivers
-                    else "Last seen"
-                ),
-            }
-        )
-    return pd.DataFrame(rows)
 
 
 def _number(value: Any, precision: int = 4) -> float | None:

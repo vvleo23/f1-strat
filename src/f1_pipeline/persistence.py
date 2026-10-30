@@ -1,3 +1,5 @@
+# AI assistance: Anthropic Claude
+# Scope: Protection against lost writes from concurrent weekend jobs.
 from __future__ import annotations
 
 import contextlib

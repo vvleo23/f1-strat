@@ -1,3 +1,5 @@
+# AI assistance: Anthropic Claude
+# Scope: Weekend forecast summary, unified Re-Live wind units, and admin-panel navigation.
 from __future__ import annotations
 
 import json

@@ -1,5 +1,5 @@
 # AI assistance: OpenAI GPT-5.6 Sol and GPT-6.1 Sol; Anthropic Claude
-# Scope: Master-data and Wikidata integration; Claude contribution to shared-write protection.
+# Scope: Master-data and Wikidata integration; shared-write protection.
 from __future__ import annotations
 
 import argparse

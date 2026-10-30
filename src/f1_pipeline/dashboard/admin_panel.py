@@ -1,3 +1,5 @@
+# AI assistance: Anthropic Claude
+# Scope: Admin panel with pipeline activity, live job progress, season coverage, and timeline.
 from __future__ import annotations
 
 import html

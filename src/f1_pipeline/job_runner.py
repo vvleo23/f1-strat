@@ -1,3 +1,5 @@
+# AI assistance: Anthropic Claude
+# Scope: Incremental job progress recording.
 from __future__ import annotations
 
 import argparse

@@ -14,6 +14,7 @@ from f1_pipeline.dashboard.read_models import (
     DashboardDataError,
     available_seasons,
     load_master_table,
+    load_qualifying_results,
     load_session_bundle,
     load_starting_grids,
 )
@@ -50,6 +51,27 @@ class DashboardReadModelsTest(unittest.TestCase):
         self.assertEqual(result.iloc[0]["grid_session_id"], "openf1:session:10")
         self.assertEqual(result.iloc[0]["source_session_key"], 10)
         self.assertEqual(grid.iloc[0]["session_id"], "openf1:session:10")
+
+    def test_qualifying_results_include_sprint_qualifying(self) -> None:
+        sessions = pd.DataFrame([
+            ("openf1:session:10", "Qualifying", "completed"),
+            ("openf1:session:11", "Sprint Qualifying", "completed"),
+            ("openf1:session:12", "Race", "completed"),
+            ("openf1:session:13", "Qualifying", "scheduled"),
+        ], columns=["session_id", "session_name", "status"])
+        catalog = SimpleNamespace(sessions=sessions)
+
+        def bundle(session_key, endpoints, manifest_dir=None):
+            result = pd.DataFrame([{
+                "session_id": f"openf1:session:{session_key}", "driver_number": 1, "position": 2,
+            }])
+            return SimpleNamespace(frames={"session_result": result})
+
+        with patch("f1_pipeline.dashboard.read_models.load_session_bundle", side_effect=bundle):
+            result = load_qualifying_results(catalog)
+        self.assertEqual(
+            sorted(result["session_id"]), ["openf1:session:10", "openf1:session:11"]
+        )
 
     def test_reads_authoritative_master_table(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
